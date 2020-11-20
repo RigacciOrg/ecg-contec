@@ -1,0 +1,372 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+Parse (very partially) an SCP-ECG electrocardiogram file.
+"""
+
+import os.path
+import sys
+import binascii
+
+__author__ = "Niccolo Rigacci"
+__copyright__ = "Copyright 2020 Niccolo Rigacci <niccolo@rigacci.org>"
+__license__ = "GPLv3-or-later"
+__email__ = "niccolo@rigacci.org"
+__version__ = "0.0.1"
+
+SECTION_0_OFFSET = 6
+SECTION_ID_HEADER_LEN = 16
+SECTION_1_TAG_TERMINATOR = 255
+POINTER_FIELD_LEN = 2 + 4 + 4
+MIN_POINTER_FIELDS = 12
+SEX_TAG = 8
+SEX_VALUES = {0: u'Not Known', 1: u'Male', 2: u'Female', 9: u'Unspecified'}
+ENCODING_TYPE = {0: 'Real (zero difference)', 1: 'First difference', 2: 'Second difference'}
+COMPRESSION_TYPE = {0: 'Not used', 1: 'Bimodal'}
+
+# TODO: There are more!
+LEAD = {
+    1: 'I',
+    2: 'II',
+    3: 'V1',
+    4: 'V2',
+    5: 'V3',
+    6: 'V4',
+    7: 'V5',
+    8: 'V6',
+    9: 'V7',
+    10: 'V2R',
+    11: 'V3R',
+    12: 'V4R',
+    13: 'V5R',
+    14: 'V6R',
+    15: 'V7R',
+    16: 'X',
+    17: 'Y',
+    18: 'Z',
+    19: 'CC5',
+    20: 'CM5',
+    21: 'LA',
+    22: 'RA',
+    23: 'LL',
+    24: 'I',
+    25: 'E',
+    26: 'C',
+    27: 'A',
+    61: 'III',
+    62: 'aVR',
+    63: 'aVL',
+    64: 'aVF'
+}
+
+KNOWN_TAGS = {
+  0: 'Patient Last Name',
+  1: 'Patient First Name',
+  2: 'Patient ID',
+  3: 'Second Last Name',
+  5: 'Patient Date of Birth',
+  8: 'Patient Sex',
+  10: 'Drugs',
+  13: 'Diagnosis or Referral Indication',
+  14: 'Acquiring Device Id Number',
+  15: 'Analyzing Device Id Number',
+  16: 'Acquiring Institution Description',
+  17: 'Analyzing Institution Description',
+  18: 'Acquiring Department Description',
+  19: 'Analyzing Department Description',
+  20: 'Referring Physician',
+  21: 'Latest Confirming Physician',
+  22: 'Technician Description',
+  23: 'Room Description',
+  25: 'Date of Acquisition',
+  26: 'Time of Acquisition',
+  30: 'Free Text',
+  31: 'ECG Sequence Number',
+  32: 'History diagnostic codes',
+  34: 'Date Time Zone',
+  35: 'Free-text Medical History'
+}
+
+MANDATORY_TAGS = [2, 14, 25, 26]
+DATE_TAGS = [5, 25]
+TIME_TAGS = [26]
+ASCIIZ_TAGS = [0, 1, 2, 3, 13, 16, 17, 18, 19, 20, 21, 22, 23, 30, 31, 35]
+MACHINE_ID_TAGS = [14, 15]
+
+
+def read_section_header(fp, offset):
+    h = {}
+    fp.seek(offset)
+    h['crc'] = int.from_bytes(f.read(2), byteorder='little')
+    h['id'] = int.from_bytes(f.read(2), byteorder='little')
+    h['length'] = int.from_bytes(f.read(4), byteorder='little')
+    h['version'] = int.from_bytes(f.read(1), byteorder='little')
+    h['protocol'] = int.from_bytes(f.read(1), byteorder='little')
+    h['reserved'] = f.read(6)
+    f.seek(offset + 2)
+    h['calc_crc'] = binascii.crc_hqx(f.read(h['length'] - 2), 0xffff)
+    if h['crc'] != h['calc_crc']:
+        print(u'ERROR: CRC check failed')
+        sys.exit(1)
+    return h
+
+
+def print_section_header(i, h, label=''):
+    print()
+    print(u'==== Section #%d: %s ====' % (i, label))
+    print(u'Section CRC:      0x%04X' % (h['crc'],))
+    print(u'Section Id:       0x%04X' % (h['id'],))
+    print(u'Section length:   %d'     % (h['length'],))
+    print(u'Section version:  0x%02X' % (h['version'],))
+    print(u'Protocol version: 0x%02X' % (h['protocol'],))
+    print(u'Calculated CRC:   0x%04X' % (h['calc_crc'],))
+
+
+def asciiz(byte_str):
+    return byte_str.decode('utf-8').split('\0', 1)[0]
+
+
+def read_parameter(fp):
+    tag = int.from_bytes(f.read(1), byteorder='little')
+    length = int.from_bytes(f.read(2), byteorder='little')
+    value = f.read(length)
+    if tag in DATE_TAGS:
+        value = parse_date(value)
+    elif tag in TIME_TAGS:
+        value = parse_time(value)
+    elif tag in ASCIIZ_TAGS:
+        value = asciiz(value)
+    elif tag == SEX_TAG:
+        value = int.from_bytes(value, byteorder='little')
+        if value in SEX_VALUES:
+            value = SEX_VALUES[value]
+        else:
+            value = u'Invalid %d' % (value)
+    elif tag in MACHINE_ID_TAGS:
+        value = parse_machine_id(value)
+    if tag in KNOWN_TAGS:
+        tag_label = KNOWN_TAGS[tag]
+    else:
+        tag_label = u'Unknown %d' % (tag,)
+    return (tag, tag_label, length, value)
+
+
+def parse_date(bytes):
+    year = int.from_bytes(bytes[0:2], byteorder='little')
+    month = int.from_bytes(bytes[2:3], byteorder='little')
+    day = int.from_bytes(bytes[3:4], byteorder='little')
+    if (month < 1 or month > 12) or (day < 1 or day > 31):
+        print(u'WARNING: Invalid date: %s' % (bytes,))
+        year, month, day = 0, 0, 0
+    return '%04d-%02d-%02d' % (year, month, day)
+
+
+def parse_time(bytes):
+    hours = int.from_bytes(bytes[0:1], byteorder='little')
+    minutes = int.from_bytes(bytes[1:2], byteorder='little')
+    seconds = int.from_bytes(bytes[2:3], byteorder='little')
+    if (hours > 23 or minutes > 59 or seconds > 59):
+        hours, minutes, seconds = 0, 0, 0
+    return '%02d:%02d:%02d' % (hours, minutes, seconds)
+
+
+def parse_machine_id(bytes):
+
+    institute_n  = int.from_bytes(bytes[1:3], byteorder='little')
+    department_n = int.from_bytes(bytes[3:5], byteorder='little')
+    device_id    = int.from_bytes(bytes[5:7], byteorder='little')
+    device_type  = int.from_bytes(bytes[7:8], byteorder='little')
+    model = asciiz(bytes[8:14])
+    return 'Inst. %d, Dept. %d, Dev. %d, Type %d, Model %s' % (institute_n, department_n, device_id, device_type, model)
+
+
+
+
+if len(sys.argv) < 2:
+    print('Usage: %s [file.ecg]' % (os.path.basename(sys.argv[0],)))
+    sys.exit(1)
+
+filename = sys.argv[1]
+filename_csv = filename + u'.csv'
+if not os.path.exists(filename):
+    print(u'ERROR: Input file %s does not exists' % (filename,))
+    sys.exit(1)
+
+# Get some metadata from file size.
+file_size = os.path.getsize(filename)
+
+f = open(filename, 'rb')
+
+
+# ==== SCP-ECG Record, check CRC and length ====
+
+# CRC is actually a byte by byte CRC-CCITT (0xFFFF)
+record_crc = int.from_bytes(f.read(2), byteorder='little')
+record_length = int.from_bytes(f.read(4), byteorder='little')
+print(u'==== SCP-ECG Record ====')
+print(u'File size:      %d bytes' % (file_size,))
+print(u'Record CRC:     0x%04X' % (record_crc,))
+print(u'Record length:  %d bytes' % (record_length,))
+f.seek(2)
+calculated_crc = binascii.crc_hqx(f.read(record_length - 2), 0xffff)
+print(u'Calculated CRC: 0x%04X' % (calculated_crc,))
+if record_crc != calculated_crc:
+    print(u'ERROR: CRC check failed')
+    sys.exit(1)
+if file_size != record_length:
+    print(u'ERROR: File length does not match record length')
+    sys.exit(1)
+
+
+# ==== Section #0 is the Pointer Section (mandatory) ====
+
+# Section #0: Section ID Header
+h = read_section_header(f, SECTION_0_OFFSET)
+print_section_header(0, h, u'Section Pointers')
+if h['reserved'].decode('utf-8') != u'SCPECG':
+    print(u'ERROR: Missing signature "SCPECG" in Section 0')
+    sys.exit(1)
+
+# Section #0: Data Part
+# Contains Pointer Fields for sections 0-11, plus manufacturer sections if any.
+# NOTICE: There is a pointer section for section 0 too.
+data_part_length = h['length'] - SECTION_ID_HEADER_LEN
+print(u'Data Part length: %d' % (data_part_length,))
+if (data_part_length % POINTER_FIELD_LEN) != 0:
+    print(u'WARNING: Data part of section #0 is %d bytes, not a multiple of %d (pointer field size)' % (data_part_length, POINTER_FIELD_LEN))
+pointer_fields = int(data_part_length / POINTER_FIELD_LEN)
+print(u'Pointer Fields:   %d' % (pointer_fields,))
+
+if pointer_fields < MIN_POINTER_FIELDS:
+    print(u'WARNING: Only %d pointer fields found, should be at least %d' % (pointer_fields, MIN_POINTER_FIELDS))
+
+f.seek(SECTION_0_OFFSET + SECTION_ID_HEADER_LEN)
+section_pointers = {}
+for i in range(0, pointer_fields):
+    section_id = int.from_bytes(f.read(2), byteorder='little')
+    section_len = int.from_bytes(f.read(4), byteorder='little')
+    section_index = int.from_bytes(f.read(4), byteorder='little')
+    if section_len != 0:
+        section_pointers[i] = {'idx': section_index, 'length': section_len}
+        print()
+        print(u'==== Pointer for Section #%d ====' % (i,))
+        print(u'Section Id:     0x%04X' % (section_id,))
+        print(u'Section index:  0x%08X' % (section_index,))
+        print(u'Section length: %d'     % (section_len,))
+        if section_id != i:
+            print(u'WARNING: Searching section pointer %d, found Id %d' % (i, section_id))
+
+
+# ==== Section #1 contains the Patient Data (mandatory) ====
+
+# Section indexes are 1-based.
+section_index = section_pointers[1]['idx'] - 1
+section_length = section_pointers[1]['length']
+h = read_section_header(f, section_index)
+print_section_header(1, h, u'Patient Data')
+if h['id'] != 1:
+    print(u'ERROR: Searching section #%d, found Id %d' % (1, h['id']))
+    sys.exit(1)
+f.seek(section_index + SECTION_ID_HEADER_LEN)
+read_len = 0
+print()
+while read_len < (section_length - SECTION_ID_HEADER_LEN):
+    tag, tag_label, length, value = read_parameter(f)
+    if tag == SECTION_1_TAG_TERMINATOR:
+        break
+    print(u'Tag: %s: %s' % (tag_label, value))
+    read_len += (1 + 2 + length)
+
+
+# ==== Section #2 contains the Huffman tables (optional) ====
+section_index = section_pointers[2]['idx'] - 1
+section_length = section_pointers[2]['length']
+if section_length == 0:
+    using_huffman = False
+else:
+    using_huffman = True
+    h = read_section_header(f, section_index)
+    print_section_header(2, h, u'Huffman tables')
+    if h['id'] != 2:
+        print(u'ERROR: Searching section #%d, found Id %d' % (2, h['id']))
+        sys.exit(1)
+    f.seek(section_index + SECTION_ID_HEADER_LEN)
+    tables_num = int.from_bytes(f.read(2), byteorder='little')
+    print()
+    if tables_num == 19999:
+        print(u'Using default table')
+    else:
+        print(u'Tables defined: %d' % (tables_num,))
+
+
+# ==== Section #3 contains ECG lead definition (optional) ====
+section_index = section_pointers[3]['idx'] - 1
+section_length = section_pointers[3]['length']
+if section_length == 0:
+    print(u'ERROR: Section #3 (ECG lead definition) not found')
+    sys.exit(1)
+h = read_section_header(f, section_index)
+print_section_header(3, h, u'ECG lead definition')
+if h['id'] != 3:
+    print(u'ERROR: Searching section #%d, found Id %d' % (3, h['id']))
+    sys.exit(1)
+f.seek(section_index + SECTION_ID_HEADER_LEN)
+leads_number = int.from_bytes(f.read(1), byteorder='little')
+flag_byte = int.from_bytes(f.read(1), byteorder='little')
+ref_beat     = (flag_byte & 0b00000001) == 0b001
+simult_read  = (flag_byte & 0b00000100) == 0b100
+lead_simult  = (flag_byte & 0b11111000) >> 3
+print()
+print(u'Leads: %d' % (leads_number,))
+print(u'Flag byte: %s' % (bin(flag_byte),))
+print(u'Reference beat: %s' % (ref_beat,))
+print(u'Simultaneous read: %s' % (simult_read,))
+print(u'Leads simulteaneous: %d' % (lead_simult,))
+for i in range(0, leads_number):
+    starting_sample = int.from_bytes(f.read(4), byteorder='little')
+    ending_sample = int.from_bytes(f.read(4), byteorder='little')
+    lead_id = int.from_bytes(f.read(1), byteorder='little')
+    print(u'Lead #%02d %4s - Sampling interval: %d - %d' % (i, LEAD[lead_id], starting_sample, ending_sample))
+
+
+# ==== Section #6 contains the rhythm data (optional) ====
+section_index = section_pointers[6]['idx'] - 1
+section_length = section_pointers[6]['length']
+if section_length == 0:
+    print(u'ERROR: Section #6 (rhythm data) not found')
+    sys.exit(1)
+h = read_section_header(f, section_index)
+print_section_header(6, h, u'Rhythm Data')
+if h['id'] != 6:
+    print(u'ERROR: Searching section #%d, found Id %d' % (6, h['id']))
+    sys.exit(1)
+#  The section contains the entire ECG rhythm data, if no reference beats have been subtracted.
+if ref_beat:
+    print(u'Cannot decode rhythm data because reference beat compression is used')
+    sys.exit(1)
+f.seek(section_index + SECTION_ID_HEADER_LEN)
+amplitude_multiplier = int.from_bytes(f.read(2), byteorder='little')  # Nanovolt
+sample_time_interval = int.from_bytes(f.read(2), byteorder='little')  # Microseconds
+encoding_diff = int.from_bytes(f.read(1), byteorder='little')
+compression = int.from_bytes(f.read(1), byteorder='little')
+if encoding_diff not in ENCODING_TYPE:
+    print(u'ERROR: Unknown encoding %d' % (encoding_diff,))
+if compression not in COMPRESSION_TYPE:
+    print(u'ERROR: Unknown compression %d' % (compression,))
+print()
+print(u'Amplitude multiplier: %d nV' % (amplitude_multiplier,))
+print(u'Sample time interval: %d us' % (sample_time_interval,))
+print(u'Encoding difference: %s' % (ENCODING_TYPE[encoding_diff],))
+print(u'Compression: %s' % (COMPRESSION_TYPE[compression],))
+print(u'Using Huffman table: %s' % (using_huffman,))
+bytes_lead = {}
+for i in range(0, leads_number):
+    bytes_lead[i] = int.from_bytes(f.read(2), byteorder='little')
+    print(u'Bytes for lead #%d: %d' % (i, bytes_lead[i]))
+#for i in range(0, leads_number):
+#for i in range(0, 1):
+#    #for j in bytes_lead[i]:
+#    b = f.read(bytes_lead[i])
+#    print(b)
+
+f.close()
