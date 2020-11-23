@@ -30,7 +30,11 @@ standard is very poor in software.
 
 The script is actually tested only against the **Example.scp** 
 file that you can find into the 
-[../../examples/](../..examples/) directory
+[../../examples/](../..examples/README.md) directory.
+
+Copy both files **scp-ecg-parse** and **huffman.py** into your 
+working directory, along with the **Example.scp** file, then 
+execute:
 
 ```
 ./scp-ecg-parse Example.scp
