@@ -13,6 +13,7 @@ Supported features:
 Unsupported features:
   * Bimodal compression.
   * Custom Huffman tables.
+  * Switch Huffman table during decoding.
   * Uncompressed data (no Huffman table).
   * Reference beat compression.
   * Many others...
