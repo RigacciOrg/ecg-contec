@@ -1,0 +1,307 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+Parse an SCP-ECG electrocardiogram file and dump it in CSV format.
+This is only a proof of concept script: it can handle only a subset
+of the ANSI/AAMI EC71:2001 specifications.
+
+Supported features:
+  * Partial parsing of Sections #0, #1, #2, #3, #6.
+  * Decode data stored as raw two-byte values or using default SCP-ECG Huffman table.
+  * Reconstruct data stored as "real data" or "second differences" sequence.
+
+Unsupported features:
+  * Bimodal compression.
+  * Custom Huffman tables.
+  * Reference beat compression.
+  * Many others...
+"""
+
+import ecg_scp as scp
+import argparse
+import os.path
+import sys
+import binascii
+
+__author__ = "Niccolo Rigacci"
+__copyright__ = "Copyright 2020 Niccolo Rigacci <niccolo@rigacci.org>"
+__license__ = "GPLv3-or-later"
+__email__ = "niccolo@rigacci.org"
+__version__ = "0.1.0"
+
+MANDATORY_TAGS = [2, 14, 25, 26]
+
+
+#-------------------------------------------------------------------------
+# Main program.
+#-------------------------------------------------------------------------
+parser = argparse.ArgumentParser(description=u'Parse an SCP-ECG file and eventually dump values in CSV format.')
+parser.add_argument('filename', type=str, help=u'SCP-ECG file to read')
+parser.add_argument('filename_csv', nargs='?', default='', type=str, help=u'CSV file to write (default append .csv to filename)')
+parser.add_argument('--millivolt', action='store_true', help=u'convert CSV values to millivolt')
+parser.add_argument('--null-as-zero', action='store_true', help=u'missing values are converted to zeroes in CSV')
+args = parser.parse_args()
+
+filename = args.filename
+filename_csv = None if len(args.filename_csv) < 1 else args.filename_csv
+if not os.path.exists(filename):
+    print(u'ERROR: Input file "%s" does not exists' % (filename,))
+    sys.exit(1)
+
+# If output CSV filename is explicit: will eventually overwrite,
+# do not overwrite if instead it is implicit.
+overwrite_msg = None
+if filename_csv is None:
+    filename_csv = filename + u'.csv'
+    if os.path.exists(filename_csv):
+        overwrite_msg = u'WARNING: File "%s" already exists, will not overwrite.' % (filename_csv,)
+        filename_csv = None
+
+# Get some metadata from file size.
+file_size = os.path.getsize(filename)
+
+f = open(filename, 'rb')
+
+# ==== SCP-ECG Record, check CRC and length ====
+
+# CRC is actually a byte by byte CRC-CCITT (0xFFFF)
+record_crc = int.from_bytes(f.read(2), byteorder='little')
+record_length = int.from_bytes(f.read(4), byteorder='little')
+print(u'==== SCP-ECG Record ====')
+print(u'File size:      %d bytes' % (file_size,))
+print(u'Record CRC:     0x%04X' % (record_crc,))
+print(u'Record length:  %d bytes' % (record_length,))
+f.seek(2)
+calculated_crc = binascii.crc_hqx(f.read(record_length - 2), 0xffff)
+print(u'Calculated CRC: 0x%04X' % (calculated_crc,))
+if record_crc != calculated_crc:
+    print(u'ERROR: CRC check failed')
+    sys.exit(1)
+if file_size != record_length:
+    print(u'ERROR: File length does not match record length')
+    sys.exit(1)
+
+
+# ==== Section #0 is the Pointer Section (mandatory) ====
+
+# Section #0: Section ID Header
+h = scp.read_section_header(f, scp.SCPECG_HEADER_LEN)
+scp.print_section_header(0, h, u'Section Pointers')
+if h['reserved'].decode('utf-8') != u'SCPECG':
+    print(u'ERROR: Missing signature "SCPECG" in Section 0')
+    sys.exit(1)
+
+# Section #0: Data Part
+# Contains Pointer Fields for sections 0-11, plus manufacturer sections if any.
+# NOTICE: There is a pointer section for section 0 too.
+data_part_length = h['length'] - scp.SECTION_HEADER_LEN
+print(u'Data Part length: %d' % (data_part_length,))
+if (data_part_length % scp.POINTER_FIELD_LEN) != 0:
+    print(u'WARNING: Data part of section #0 is %d bytes, not a multiple of %d (pointer field size)' % (data_part_length, scp.POINTER_FIELD_LEN))
+pointer_fields = int(data_part_length / scp.POINTER_FIELD_LEN)
+print(u'Pointer Fields:   %d' % (pointer_fields,))
+
+if pointer_fields < scp.MIN_POINTER_FIELDS:
+    print(u'WARNING: Only %d pointer fields found, should be at least %d' % (pointer_fields, MIN_POINTER_FIELDS))
+
+f.seek(scp.SCPECG_HEADER_LEN + scp.SECTION_HEADER_LEN)
+section_pointers = {}
+for i in range(0, pointer_fields):
+    section_id = int.from_bytes(f.read(2), byteorder='little')
+    section_len = int.from_bytes(f.read(4), byteorder='little')
+    section_index = int.from_bytes(f.read(4), byteorder='little')
+    section_pointers[i] = {'idx': section_index, 'length': section_len}
+    print()
+    print(u'==== Pointer for Section #%d ====' % (i,))
+    print(u'Section Id:     0x%04X' % (section_id,))
+    print(u'Section index:  0x%08X' % (section_index,))
+    print(u'Section length: %d'     % (section_len,))
+    if section_id != i:
+        print(u'WARNING: Searching section pointer %d, found Id %d' % (i, section_id))
+
+
+# ==== Section #1 contains the Patient Data (mandatory) ====
+
+# Section indexes are 1-based.
+section_index = section_pointers[1]['idx'] - 1
+section_length = section_pointers[1]['length']
+h = scp.read_section_header(f, section_index)
+scp.print_section_header(1, h, u'Patient Data')
+if h['id'] != 1:
+    print(u'ERROR: Searching section #%d, found Id %d' % (1, h['id']))
+    sys.exit(1)
+f.seek(section_index + scp.SECTION_HEADER_LEN)
+read_len = 0
+print()
+while read_len < (section_length - scp.SECTION_HEADER_LEN):
+    tag, tag_label, length, value = scp.read_parameter(f)
+    print(u'Tag: %s: %s' % (tag_label, value))
+    if tag == scp.TAG_EOF:
+        break
+    read_len += (1 + 2 + length)
+
+
+# ==== Section #2 contains the Huffman tables (optional) ====
+section_index = section_pointers[2]['idx'] - 1
+section_length = section_pointers[2]['length']
+if section_length == 0:
+    using_huffman = False
+else:
+    using_huffman = True
+    h = scp.read_section_header(f, section_index)
+    scp.print_section_header(2, h, u'Huffman tables')
+    if h['id'] != 2:
+        print(u'ERROR: Searching section #%d, found Id %d' % (2, h['id']))
+        sys.exit(1)
+    f.seek(section_index + scp.SECTION_HEADER_LEN)
+    tables_num = int.from_bytes(f.read(2), byteorder='little')
+    print()
+    if tables_num == scp.DEFAULT_HUFFMAN_TABLE:
+        print(u'INFO: Using SCP-ECG default Huffman table')
+    else:
+        print(u'ERROR: Using custom Huffman table #%d not supported' % (tables_num,))
+        sys.exit(1)
+
+
+# ==== Section #3 contains ECG lead definition (optional) ====
+section_index = section_pointers[3]['idx'] - 1
+section_length = section_pointers[3]['length']
+if section_length == 0:
+    print(u'ERROR: Section #3 (ECG lead definition) not found')
+    sys.exit(1)
+h = scp.read_section_header(f, section_index)
+scp.print_section_header(3, h, u'ECG lead definition')
+if h['id'] != 3:
+    print(u'ERROR: Searching section #%d, found Id %d' % (3, h['id']))
+    sys.exit(1)
+f.seek(section_index + scp.SECTION_HEADER_LEN)
+leads_number = int.from_bytes(f.read(1), byteorder='little')
+flag_byte = int.from_bytes(f.read(1), byteorder='little')
+ref_beat     = (flag_byte & 0b00000001) == 0b001
+simult_read  = (flag_byte & 0b00000100) == 0b100
+lead_simult  = (flag_byte & 0b11111000) >> 3
+print()
+print(u'Leads: %d' % (leads_number,))
+print(u'Flag byte: %s' % (bin(flag_byte),))
+print(u'Reference beat: %s' % (ref_beat,))
+print(u'Simultaneous read: %s' % (simult_read,))
+print(u'Leads simulteaneous: %d' % (lead_simult,))
+lead_sample_num = {}
+max_sample_num = 0
+min_sample_num = None
+for i in range(0, leads_number):
+    # Sample numbering is 1-based.
+    starting_sample = int.from_bytes(f.read(4), byteorder='little')
+    ending_sample = int.from_bytes(f.read(4), byteorder='little')
+    lead_id = int.from_bytes(f.read(1), byteorder='little')
+    if ending_sample > max_sample_num:
+        max_sample_num = ending_sample
+    if min_sample_num == None:
+        min_sample_num = starting_sample
+    elif starting_sample < min_sample_num:
+        min_sample_num = starting_sample
+    if starting_sample < 1:
+        warning = u' (start shifted from %d to 1)' % (starting_sample,)
+        starting_fixed = 1
+    else:
+        warning = u''
+        starting_fixed = starting_sample
+    lead_sample_num[i] = {'start': starting_fixed, 'end': ending_sample}
+    print(u'Lead #%02d %4s - Sampling interval: %d - %d%s' % (i, scp.LEAD[lead_id], starting_sample, ending_sample, warning))
+if min_sample_num < 1:
+    print()
+    print(u'WARNING: Starting sample shall start with 1')
+
+
+# ==== Section #6 contains the rhythm data (optional) ====
+# Contains the entire ECG rhythm data, if no reference beats have been subtracted.
+section_index = section_pointers[6]['idx'] - 1
+section_length = section_pointers[6]['length']
+if section_length == 0:
+    print(u'ERROR: Section #6 (rhythm data) not found')
+    sys.exit(1)
+h = scp.read_section_header(f, section_index)
+scp.print_section_header(6, h, u'Rhythm Data')
+if h['id'] != 6:
+    print(u'ERROR: Searching section #%d, found Id %d' % (6, h['id']))
+    sys.exit(1)
+if ref_beat:
+    print(u'ERROR: Unsupported rhythm using reference beat compression')
+    sys.exit(1)
+f.seek(section_index + scp.SECTION_HEADER_LEN)
+amplitude_multiplier = int.from_bytes(f.read(2), byteorder='little')  # Nanovolt
+sample_time_interval = int.from_bytes(f.read(2), byteorder='little')  # Microseconds
+encoding = int.from_bytes(f.read(1), byteorder='little')
+bimodal_compr = int.from_bytes(f.read(1), byteorder='little')
+if encoding not in scp.ENCODING:
+    print(u'ERROR: Unknown encoding mode %d, I known only "%s"' % (encoding, scp.ENCODING))
+    sys.exit(1)
+if bimodal_compr not in scp.BIMODAL_COMPRESSION:
+    print(u'ERROR: Unknown compression %d' % (bimodal_compr,))
+    sys.exit(1)
+print()
+print(u'Amplitude multiplier: %d nV' % (amplitude_multiplier,))
+print(u'Sample time interval: %d us' % (sample_time_interval,))
+print(u'Encoding mode: %s' % (scp.ENCODING[encoding],))
+print(u'Bimodal compression: %s' % (scp.BIMODAL_COMPRESSION[bimodal_compr],))
+print(u'Using Huffman table: %s' % (using_huffman,))
+stored_bytes_lead = {}
+for i in range(0, leads_number):
+    stored_bytes_lead[i] = int.from_bytes(f.read(2), byteorder='little')
+    print(u'Bytes used to store lead #%d data: %d' % (i, stored_bytes_lead[i]))
+
+ecg_data = {}
+for lead in range(0, leads_number):
+    data_bytes = f.read(stored_bytes_lead[lead])  # data_bytes is of type <class 'bytes'>
+    print()
+    print('==== Read %d bytes for lead #%d' % (len(data_bytes), lead))
+    if bimodal_compr != 0:
+        print(u'WARNING: Unsupported "%s" compression' % (scp.BIMODAL_COMPRESSION[bimodal_compr],))
+        continue
+    if using_huffman:
+        bit_decoder = scp.huffman_decoder()
+    else:
+        bit_decoder = scp.raw_decoder()
+    if encoding == scp.ENCODING_REAL:
+        sample_num = lead_sample_num[lead]['start']
+        for val in bit_decoder.decode(data_bytes):
+            ecg_data[(sample_num, lead)] = val
+            sample_num += 1
+    elif encoding == scp.ENCODING_SECOND_DIFF:
+        sequence = scp.second_diff()
+        sample_num = lead_sample_num[lead]['start']
+        for diff in bit_decoder.decode(data_bytes):
+            val = sequence.val(diff)
+            ecg_data[(sample_num, lead)] = val
+            sample_num += 1
+    else:
+        print(u'WARNING: Unsupported encoding mode %d: "%s"' % (encoding, scp.ENCODING[encoding]))
+        continue
+    # Actual number of samples can differ from Section #3 declarations.
+    print(u'INFO: Lead #%d: read %d samples' % (lead, sample_num - 1))
+
+f.close()
+
+# Dump the full time serie, in CSV format.
+print()
+print(u'==== Saving ECG data in CSV format ====')
+if overwrite_msg is not None:
+    print(overwrite_msg)
+if filename_csv is not None:
+    f_out = open(filename_csv, 'wb')
+    mult = float(amplitude_multiplier) / 1000000.0
+    empty = not args.null_as_zero
+    for sample_num in range(1, (max_sample_num + 1)):
+        values_row = []
+        for lead in range(0, leads_number):
+            if (sample_num, lead) in ecg_data:
+                values_row.append(ecg_data[(sample_num, lead)])
+            else:
+                values_row.append(None)
+        if args.millivolt:
+            row = ','.join(scp.csv_format(x, multiplier=mult, none_as_empty=empty) for x in values_row)
+        else:
+            row = ','.join(scp.csv_format(x, num_format=u'%d', none_as_empty=empty) for x in values_row)
+        f_out.write(row.encode('utf-8') + b'\n')
+    f_out.close()
+    print(u'INFO: CSV data written to file "%s"' % (filename_csv,))

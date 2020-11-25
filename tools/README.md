@@ -1,4 +1,28 @@
-# Python script to read and parse SCP-ECG cardiogram files
+# contec-ecg2csv, contec-ecg2scp
+
+Python scripts to convert electrocardiogram files produced by
+the **Contec ECG90A** device into CSV files or SCP-ECG files
+respectively.
+
+The scripts relay on the Pyhon modules **ecg_contec.py** and
+**ecg_scp.py**, which should be present in the same directory
+or installed as system-wide modules.
+
+You can control some aspects of the CSV creation; please refer
+to the **ecg_contec.py** source code and see the **export_csv()**
+optional parameters, like **as_millivolt**, **xoffset**, etc.
+
+This is an example on how to use the **ecg_contec** module:
+
+```
+import ecg_contec as contec
+ecg = contec.ecg('0000037.ECG')
+ecg.export_csv(overwrite=True, as_millivolt=False, cols=12)
+```
+
+# scp-ecg2csv
+
+Python script to read and parse SCP-ECG cardiogram files.
 
 This is just a proof-of-concept script to read SCP-ECG 
 cardiogram files and convert them into CSV format. It supports a 
@@ -13,11 +37,14 @@ of the file.
 limited number of tags.
 * **Section #2** - **Huffman tables**: only the default SCP-ECG 
 Huffman table is supported. Custom tables and switching table 
-during encoding is not supported.
+during encoding is not supported. I no Section #2 is present, 
+rhythm data is supposed to be encoded as two-byte signed 
+integers.
 * **Section #3** - **ECG lead definition**.
-* **Section #6** - **Rhythm data**: only "second difference" 
-sequences are supported. Bimodal compression, reference beat 
-compression, etc. are not supported.
+* **Section #6** - **Rhythm data**: only real data ("zero 
+difference") and "second difference" sequences are supported. 
+Bimodal compression, reference beat compression, etc. are not 
+supported.
 
 ## The SCP-ECG standard format
 
@@ -32,16 +59,17 @@ The script is actually tested only against the **Example.scp**
 file that you can find into the 
 [../../examples/](../../examples/README.md) directory.
 
-Copy both files **scp-ecg-parse** and **huffman.py** into your 
+Copy both files **scp-ecg2csv** and **ecg_scp.py** into your 
 working directory, along with the **Example.scp** file, then 
 execute:
 
 ```
-./scp-ecg-parse Example.scp
+./scp-ecg2csv Example.scp
 ```
 
 Several info about the sections are printed to the standard 
-output, followed by the CSV dump of the original values.
+output. A file named Example.scp.csv is saved with the CSV dump 
+of the original values.
 
 ## Web References
 

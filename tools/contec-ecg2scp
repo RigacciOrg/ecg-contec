@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import contec
+import ecg_contec as contec
 import os.path
 import sys
 
@@ -31,5 +31,5 @@ print(u'Weight:    %d'   % (ecg.patient_weight,))
 print(u'Unknown1:  0x%04X' % (int.from_bytes(ecg.unknown1, byteorder='little'),))
 print(u'Unknown2:  0x%04X' % (int.from_bytes(ecg.unknown2, byteorder='little'),))
 
-#ecg.export_csv(overwrite=True, cols=6)
-ecg.export_csv(overwrite=True)
+ecg.export_scp(overwrite=True)
+print(u'File "%s" saved' % (filename + '.scp',))

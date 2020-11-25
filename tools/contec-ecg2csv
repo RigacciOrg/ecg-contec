@@ -1,0 +1,35 @@
+#!/usr/bin/python3
+
+import ecg_contec as contec
+import os.path
+import sys
+
+def sec2minsec(sec):
+    m = int(sec / 60)
+    s = sec - (m * 60)
+    return u'%02d:%05.2f' % (m, s)
+
+if len(sys.argv) < 2:
+    print('Usage: %s [file.ecg]' % (os.path.basename(sys.argv[0],)))
+    sys.exit(1)
+
+filename = sys.argv[1]
+ecg = contec.ecg(filename)
+
+print(u'File name: %s'   % (ecg.filename,))
+print(u'File size: %s'   % (ecg.file_size,))
+print(u'Data size: %d'   % (ecg.payload_len,))
+print(u'Samples:   %d'   % (ecg.samples,))
+print(u'Duration:  %s (M:SS.dd)' % (sec2minsec(ecg.duration),))
+print('')
+print(u'Case name: %s'   % (ecg.case,))
+print(u'Date:      %s'   % (ecg.timestamp,))
+print(u'Patient:   %s'   % (ecg.patient_name,))
+print(u'Sex:       %s'   % (ecg.patient_sex_label,))
+print(u'Age:       %d'   % (ecg.patient_age,))
+print(u'Weight:    %d'   % (ecg.patient_weight,))
+print(u'Unknown1:  0x%04X' % (int.from_bytes(ecg.unknown1, byteorder='little'),))
+print(u'Unknown2:  0x%04X' % (int.from_bytes(ecg.unknown2, byteorder='little'),))
+
+ecg.export_csv(overwrite=True, as_millivolt=False, cols=12)
+print(u'File "%s" saved' % (filename + '.csv',))
