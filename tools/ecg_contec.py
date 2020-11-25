@@ -154,7 +154,7 @@ class ecg():
         f_in.close()
 
 
-    def export_csv(self, filename=None, overwrite=False, as_millivolt=False, xoffset=ECG90A_XOFFSET, cols=DEFAULT_CSV_COLUMNS):
+    def export_csv(self, filename=None, overwrite=False, as_millivolt=False, none_as_zero=False, xoffset=ECG90A_XOFFSET, cols=DEFAULT_CSV_COLUMNS):
         """ Export ECG data into a CSV format file """
 
         if filename is None:
@@ -168,9 +168,9 @@ class ecg():
         with open(filename_csv, 'w') as f:
             for row in self.readline(xoffset=xoffset, cols=cols):
                 if as_millivolt:
-                    f.write(','.join(scp.csv_format(x, multiplier=amplitude_mult) for x in row) + '\n')
+                    f.write(','.join(scp.csv_format(x, multiplier=amplitude_mult, none_as_zero=none_as_zero) for x in row) + '\n')
                 else:
-                    f.write(','.join(scp.csv_format(x, num_format=u'%d') for x in row) + '\n')
+                    f.write(','.join(scp.csv_format(x, num_format=u'%d', none_as_zero=none_as_zero) for x in row) + '\n')
 
 
     def export_scp(self, filename=None, overwrite=False, xoffset=ECG90A_XOFFSET):

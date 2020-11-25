@@ -262,15 +262,16 @@ for lead in range(0, leads_number):
         bit_decoder = scp.huffman_decoder()
     else:
         bit_decoder = scp.raw_decoder()
+    sample_num = lead_sample_num[lead]['start']
     if encoding == scp.ENCODING_REAL:
-        sample_num = lead_sample_num[lead]['start']
         for val in bit_decoder.decode(data_bytes):
+            # TODO: Is there a value for NULL?
             ecg_data[(sample_num, lead)] = val
             sample_num += 1
     elif encoding == scp.ENCODING_SECOND_DIFF:
         sequence = scp.second_diff()
-        sample_num = lead_sample_num[lead]['start']
         for diff in bit_decoder.decode(data_bytes):
+            # TODO: Is there a value for NULL?
             val = sequence.val(diff)
             ecg_data[(sample_num, lead)] = val
             sample_num += 1
@@ -290,7 +291,6 @@ if overwrite_msg is not None:
 if filename_csv is not None:
     f_out = open(filename_csv, 'wb')
     mult = float(amplitude_multiplier) / 1000000.0
-    empty = not args.null_as_zero
     for sample_num in range(1, (max_sample_num + 1)):
         values_row = []
         for lead in range(0, leads_number):
@@ -299,9 +299,9 @@ if filename_csv is not None:
             else:
                 values_row.append(None)
         if args.millivolt:
-            row = ','.join(scp.csv_format(x, multiplier=mult, none_as_empty=empty) for x in values_row)
+            row = ','.join(scp.csv_format(x, multiplier=mult, none_as_zero=args.null_as_zero) for x in values_row)
         else:
-            row = ','.join(scp.csv_format(x, num_format=u'%d', none_as_empty=empty) for x in values_row)
+            row = ','.join(scp.csv_format(x, num_format=u'%d', none_as_zero=args.null_as_zero) for x in values_row)
         f_out.write(row.encode('utf-8') + b'\n')
     f_out.close()
     print(u'INFO: CSV data written to file "%s"' % (filename_csv,))

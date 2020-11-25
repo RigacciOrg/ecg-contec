@@ -31,5 +31,5 @@ print(u'Weight:    %d'   % (ecg.patient_weight,))
 print(u'Unknown1:  0x%04X' % (int.from_bytes(ecg.unknown1, byteorder='little'),))
 print(u'Unknown2:  0x%04X' % (int.from_bytes(ecg.unknown2, byteorder='little'),))
 
-ecg.export_csv(overwrite=True, as_millivolt=False, cols=12)
+ecg.export_csv(overwrite=True, as_millivolt=False, none_as_zero=False, cols=12)
 print(u'File "%s" saved' % (filename + '.csv',))
