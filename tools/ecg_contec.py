@@ -197,6 +197,8 @@ class ecg():
             sex_code = scp.SEX_FEMALE
         else:
             sex_code = scp.SEX_UNKNOWN
+        # Patient weight.
+        weight_unit = scp.WEIGHT_UNSPECIFIED if self.patient_weight == 0 else scp.WEIGHT_KILOGRAM
         # Patient age.
         age_unit = scp.AGE_UNSPECIFIED if self.patient_age == 0 else scp.AGE_YEARS
         # Date and time of acquisition
@@ -209,6 +211,7 @@ class ecg():
         s[1] += scp.make_tag(scp.TAG_ECG_SEQ_NUM, scp.make_asciiz(self.case))
         s[1] += scp.make_tag(scp.TAG_PATIENT_LAST_NAME, scp.make_asciiz(self.patient_name))
         s[1] += scp.make_tag(scp.TAG_PATIENT_SEX, struct.pack('<B', sex_code))
+        s[1] += scp.make_tag(scp.TAG_PATIENT_WEIGHT, scp.make_weight(self.patient_weight, weight_unit))
         s[1] += scp.make_tag(scp.TAG_PATIENT_AGE, scp.make_age(self.patient_age, age_unit))
         s[1] += scp.make_tag(scp.TAG_DATE_ACQ, scp.make_date(t))
         s[1] += scp.make_tag(scp.TAG_TIME_ACQ, scp.make_time(t))

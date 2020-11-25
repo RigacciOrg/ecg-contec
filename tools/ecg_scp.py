@@ -28,7 +28,10 @@ TAG_PATIENT_ID = 2
 TAG_PATIENT_SECOND_LAST_NAME = 3
 TAG_PATIENT_AGE = 4
 TAG_PATIENT_DATE_OF_BIRTH = 5
+TAG_PATIENT_HEIGHT = 6
+TAG_PATIENT_WEIGHT = 7
 TAG_PATIENT_SEX = 8
+TAG_PATIENT_RACE = 9
 TAG_DRUGS = 10
 TAG_DIAG_INDICATION = 13
 TAG_ACQ_DEV_ID = 14
@@ -50,33 +53,36 @@ TAG_DATE_TIME_ZONE = 34
 TAG_TEXT_MED_HIST = 35
 TAG_EOF = 255
 TAG = {
-    TAG_PATIENT_LAST_NAME: 'Patient Last Name',
-    TAG_PATIENT_FIRST_NAME: 'Patient First Name',
-    TAG_PATIENT_ID: 'Patient ID',
-    TAG_PATIENT_SECOND_LAST_NAME: 'Second Last Name',
-    TAG_PATIENT_AGE: 'Patient Age',
-    TAG_PATIENT_DATE_OF_BIRTH: 'Patient Date of Birth',
-    TAG_PATIENT_SEX: 'Patient Sex',
-    TAG_DRUGS: 'Drugs',
-    TAG_DIAG_INDICATION: 'Diagnosis or Referral Indication',
-    TAG_ACQ_DEV_ID: 'Acquiring Device Id',
-    TAG_ANALYZ_DEV_ID: 'Analyzing Device Id',
-    TAG_ACQ_INST_DESC: 'Acquiring Institution Description',
-    TAG_ANALYZ_INST_DESC: 'Analyzing Institution Description',
-    TAG_ACQ_DEPT_DESC: 'Acquiring Department Description',
-    TAG_ANALYZ_DEPT_DESC: 'Analyzing Department Description',
-    TAG_REF_PHYSICIAN: 'Referring Physician',
-    TAG_LATEST_PHYSICIAN: 'Latest Confirming Physician',
-    TAG_TECHNICIAN_DESC: 'Technician Description',
-    TAG_ROOM_DESC: 'Room Description',
-    TAG_DATE_ACQ: 'Date of Acquisition',
-    TAG_TIME_ACQ: 'Time of Acquisition',
-    TAG_FREE_TEXT: 'Free Text',
-    TAG_ECG_SEQ_NUM: 'ECG Sequence Number',
-    TAG_HIST_DIAG_CODES: 'History diagnostic codes',
-    TAG_DATE_TIME_ZONE: 'Date Time Zone',
-    TAG_TEXT_MED_HIST: 'Free-text Medical History',
-    TAG_EOF: 'End of section'
+    TAG_PATIENT_LAST_NAME: u'Patient Last Name',
+    TAG_PATIENT_FIRST_NAME: u'Patient First Name',
+    TAG_PATIENT_ID: u'Patient ID',
+    TAG_PATIENT_SECOND_LAST_NAME: u'Second Last Name',
+    TAG_PATIENT_AGE: u'Patient Age',
+    TAG_PATIENT_DATE_OF_BIRTH: u'Patient Date of Birth',
+    TAG_PATIENT_HEIGHT: u'Patient Height',
+    TAG_PATIENT_WEIGHT: u'Patient Weight',
+    TAG_PATIENT_SEX: u'Patient Sex',
+    TAG_PATIENT_RACE: u'Patient Race',
+    TAG_DRUGS: u'Drugs',
+    TAG_DIAG_INDICATION: u'Diagnosis or Referral Indication',
+    TAG_ACQ_DEV_ID: u'Acquiring Device Id',
+    TAG_ANALYZ_DEV_ID: u'Analyzing Device Id',
+    TAG_ACQ_INST_DESC: u'Acquiring Institution Description',
+    TAG_ANALYZ_INST_DESC: u'Analyzing Institution Description',
+    TAG_ACQ_DEPT_DESC: u'Acquiring Department Description',
+    TAG_ANALYZ_DEPT_DESC: u'Analyzing Department Description',
+    TAG_REF_PHYSICIAN: u'Referring Physician',
+    TAG_LATEST_PHYSICIAN: u'Latest Confirming Physician',
+    TAG_TECHNICIAN_DESC: u'Technician Description',
+    TAG_ROOM_DESC: u'Room Description',
+    TAG_DATE_ACQ: u'Date of Acquisition',
+    TAG_TIME_ACQ: u'Time of Acquisition',
+    TAG_FREE_TEXT: u'Free Text',
+    TAG_ECG_SEQ_NUM: u'ECG Sequence Number',
+    TAG_HIST_DIAG_CODES: u'History diagnostic codes',
+    TAG_DATE_TIME_ZONE: u'Date Time Zone',
+    TAG_TEXT_MED_HIST: u'Free-text Medical History',
+    TAG_EOF: u'End of section'
 }
 
 # Section #1 - Patient Data - Sex
@@ -89,6 +95,32 @@ SEX = {
     SEX_MALE: u'Male', 
     SEX_FEMALE: u'Female', 
     SEX_UNSPECIFIED: u'Unspecified'
+}
+
+# Section #1 - Patient Data - Race
+RACE_UNSPECIFIED = 0
+RACE_CAUCASIAN = 1
+RACE_BLACK = 2
+RACE_ORIENTAL = 3
+RACE = {
+    RACE_UNSPECIFIED: 'Unspecified',
+    RACE_CAUCASIAN: 'Caucasian',
+    RACE_BLACK: 'Black',
+    RACE_ORIENTAL: 'Oriental'
+}
+
+# Section #1 - Patient Data - Weight
+WEIGHT_UNSPECIFIED = 0
+WEIGHT_KILOGRAM = 1
+WEIGHT_GRAM = 2
+WEIGHT_POUND = 3
+WEIGHT_OUNCE = 4
+WEIGHT = {
+    WEIGHT_UNSPECIFIED: u'Unspecified',
+    WEIGHT_KILOGRAM: u'Kilogram',
+    WEIGHT_GRAM: u'Gram',
+    WEIGHT_POUND: u'Pound',
+    WEIGHT_OUNCE: u'Ounce',
 }
 
 # Section #1 - Patient Data - Age
@@ -226,13 +258,13 @@ MEASURE_NOT_COMPUTED = 29999
 MEASURE_LEAD_REJECTED = 29998
 MEASURE_WAVE_NOT_PRESENT = 19999
 
-def csv_format(val, none_as_empty=True, num_format=u'%.6f', multiplier=1):
+def csv_format(val, none_as_zero=False, num_format=u'%.6f', multiplier=1):
     """ Return the value formatted as string suitable for CSV output """
     if val == None:
-        if none_as_empty:
-            return u''
-        else:
+        if none_as_zero:
             return num_format % (0,)
+        else:
+            return u''
     else:
         return num_format % (val * multiplier,)
 
@@ -243,6 +275,10 @@ def make_date(d):
 def make_time(d):
     """ Return a 3 bytes SCP-ECG encoded time from a datetime object """
     return struct.pack('<B', d.hour) + struct.pack('<B', d.minute) + struct.pack('<B', d.second)
+
+def make_weight(weight, unit):
+    """ Return a 3 bytes SCP-ECG encoded weight object """
+    return struct.pack('<H', weight) + struct.pack('<B', unit)
 
 def make_age(age, unit):
     """ Return a 3 bytes SCP-ECG encoded age object """
@@ -281,7 +317,6 @@ def pack_section(sect, data_part):
 def parse_asciiz(data):
     return data.decode('utf-8').split('\0', 1)[0]
 
-
 def parse_age(data):
     age = int.from_bytes(data[0:2], byteorder='little')
     unit = int.from_bytes(data[2:3], byteorder='little')
@@ -291,6 +326,16 @@ def parse_age(data):
         return 'Not specified'
     else:
         return '%d %s' % (age, AGE[unit])
+
+def parse_weight(data):
+    weight = int.from_bytes(data[0:2], byteorder='little')
+    unit = int.from_bytes(data[2:3], byteorder='little')
+    if unit not in WEIGHT:
+        unit = 0
+    if weight == 0 and unit == 0:
+        return 'Not specified'
+    else:
+        return '%d %s' % (weight, WEIGHT[unit])
 
 def parse_date(data):
     """ Convert a date from 4-bytes SCP-ECG format to ISO YYYY-MM-DD format """
@@ -368,7 +413,15 @@ def read_parameter(fp):
         if value in SEX:
             value = SEX[value]
         else:
-            value = u'Invalid %d' % (value)
+            value = u'Invalid %d' % (value,)
+    elif tag == TAG_PATIENT_RACE:
+        value = int.from_bytes(value, byteorder='little')
+        if value in RACE:
+            value = RACE[value]
+        else:
+            value = u'Invalid %d' % (value,)
+    elif tag == TAG_PATIENT_WEIGHT:
+        value = parse_weight(value)
     elif tag in TAGS_TYPE_AGE:
         value = parse_age(value)
     elif tag in TAGS_TYPE_MACHINE_ID:
