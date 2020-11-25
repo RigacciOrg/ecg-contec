@@ -202,7 +202,6 @@ class ecg():
         # Date and time of acquisition
         try:
             t = datetime.datetime.strptime(self.timestamp, '%Y-%m-%d %H:%M:%S')
-            1 / 0
         except:
             t = self.file_timestamp
             print(u'WARNING: Cannot parse case time, using file timestamp "%s"' % (t.strftime('%Y-%m-%d %H:%M:%S'),))
