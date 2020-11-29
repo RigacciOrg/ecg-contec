@@ -99,7 +99,7 @@ class ecg():
         f_in = open(self.filename, 'rb')
         f_in.seek(HEADER_LEN)
         bytes_per_sample = int(self.sample_bits / 8)
-        empty_rows = 0
+        read_rows = 0
         while True:
             row = []
             # Read a sampled value for each data serie.
@@ -118,21 +118,17 @@ class ecg():
                     # Normalize the values shifting by xoffset.
                     value += xoffset
                 row.append(value)
-            # At the end of data there should be two zero rows plus 5 zero bytes = FOOTER_LEN of zeroes.
+            # Should never reach the end of file: a row with all-zeros terminate the iterator.
             if data is None:
                 unused_values = len(row)
-                if empty_rows != 2 and unused_values != 2:
-                    print(u'WARNING: Data does not terminate with %d zero bytes' % (FOOTER_LEN,))
-                print(u'DEBUG: End of file: zero rows: %d, unused values: %s' % (empty_rows, unused_values))
-                # Terminate iterator.
+                print(u'WARNING: Unexpected EOF: rows read: %d, expected: %d, unused values: %s' % (read_rows, self.samples, unused_values))
+                # Terminate the iterator.
                 break
-            # Discard all-zeroes rows, that should appear only at the end of data.
+            # A row with all-zeros means end of data.
             if row == [xoffset] * self.data_series:
-                empty_rows += 1
-                continue
-            # Found a zeroes row, but not at the end of data: terminate the iterator.
-            if empty_rows != 0:
-                print(u'ERROR: Rows with all zeroes are not expected within data.')
+                if read_rows != self.samples:
+                    print(u'WARNING: Unexpected end of data: found an all-zeros row, only %d read so far, expected %d' % (read_rows, self.samples))
+                # Terminate the iterator.
                 break
             # Assume that the first two data series are lead II and lead III,
             # so calculate I, avR, avL and avF using the Einthoven formulas.
@@ -150,6 +146,7 @@ class ecg():
                     lead_avl = None
                     lead_avf = None
             ecg_row = [lead_i, lead_ii, lead_iii, lead_avr, lead_avl, lead_avf] + row[2:]
+            read_rows += 1
             yield ecg_row[0:cols]
         f_in.close()
 
@@ -211,8 +208,8 @@ class ecg():
         s[1] += scp.make_tag(scp.TAG_ECG_SEQ_NUM, scp.make_asciiz(self.case))
         s[1] += scp.make_tag(scp.TAG_PATIENT_LAST_NAME, scp.make_asciiz(self.patient_name))
         s[1] += scp.make_tag(scp.TAG_PATIENT_SEX, struct.pack('<B', sex_code))
-        s[1] += scp.make_tag(scp.TAG_PATIENT_WEIGHT, scp.make_weight(self.patient_weight, weight_unit))
-        s[1] += scp.make_tag(scp.TAG_PATIENT_AGE, scp.make_age(self.patient_age, age_unit))
+        s[1] += scp.make_tag(scp.TAG_PATIENT_WEIGHT, scp.make_3bytes_intval_unit(self.patient_weight, weight_unit))
+        s[1] += scp.make_tag(scp.TAG_PATIENT_AGE, scp.make_3bytes_intval_unit(self.patient_age, age_unit))
         s[1] += scp.make_tag(scp.TAG_DATE_ACQ, scp.make_date(t))
         s[1] += scp.make_tag(scp.TAG_TIME_ACQ, scp.make_time(t))
         s[1] += scp.make_tag(scp.TAG_ACQ_DEV_ID, scp.make_machine_id('ECG90A'))
