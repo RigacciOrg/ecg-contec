@@ -5,12 +5,14 @@ Parses ECG files produced by the Contec ECG90A electrocardiograph.
 Can export in CSV or SCP-ECG format.
 """
 
+import ecg_scp as scp
+
 import binascii
 import datetime
+import logging
 import os.path
 import struct
 import sys
-import ecg_scp as scp
 
 __author__ = "Niccolo Rigacci"
 __copyright__ = "Copyright 2019-2020 Niccolo Rigacci <niccolo@rigacci.org>"
@@ -54,11 +56,15 @@ DEFAULT_CSV_COLUMNS = 12
 class ecg():
 
     def __init__(self, filename, sample_rate=ECG90A_SAMPLE_RATE, data_series=ECG90A_DATA_SERIES, sample_bits=ECG90A_SAMPLE_BITS):
+        logging.basicConfig(format='%(levelname)s: ecg_contec: %(message)s', level=logging.DEBUG)
+        self.err = 0
         if not os.path.exists(filename):
-            print(u'ERROR: Input file %s does not exists' % (filename,))
+            logging.error(u'Input file %s does not exists' % (filename,))
+            self.err |= 0b00000001
             return None
         if (sample_bits % 8) != 0:
-            print(u'ERROR: sample_bits is not multiple of 8')
+            logging.error(u'sample_bits is not multiple of 8')
+            self.err |= 0b00000011
             return None
         self.filename = filename
         self.sample_rate = sample_rate
@@ -70,11 +76,12 @@ class ecg():
         self.payload_len = self.file_size - HEADER_LEN - FOOTER_LEN
         bytes_per_sample = self.data_series * int(self.sample_bits / 8)
         if (self.payload_len % bytes_per_sample) != 0:
-            print(u'ERROR: File size mismatch: (%d - %d - %d) = %d is not multiple of %d' % (self.file_size, HEADER_LEN, FOOTER_LEN, self.payload_len, bytes_per_sample))
+            logging.error(u'File size mismatch: (%d - %d - %d) = %d is not multiple of %d' % (self.file_size, HEADER_LEN, FOOTER_LEN, self.payload_len, bytes_per_sample))
+            self.err |= 0b00000010
             return None
         self.samples = int(self.payload_len / bytes_per_sample)
         self.duration = float(self.samples / self.sample_rate)
-        # Read the header.
+        # Read the header. TODO: Handle errors.
         with open(filename, 'rb') as f:
             self.case = self.asciiz(f.read(8))
             self.unknown1 = f.read(2)
@@ -106,7 +113,8 @@ class ecg():
             for i in range(0, self.data_series):
                 data = f_in.read(bytes_per_sample)
                 if len(data) < bytes_per_sample:
-                    print(u'DEBUG: Short read: only %d byte(s) => %s' % (len(data), data))
+                    logging.debug(u'Short read: only %d byte(s) => %s' % (len(data), data))
+                    self.err |= 0b00000100
                     data = None
                     break
                 # Convert bytes into signed integer.
@@ -121,13 +129,15 @@ class ecg():
             # Should never reach the end of file: a row with all-zeros terminate the iterator.
             if data is None:
                 unused_values = len(row)
-                print(u'WARNING: Unexpected EOF: rows read: %d, expected: %d, unused values: %s' % (read_rows, self.samples, unused_values))
+                logging.warning(u'Unexpected EOF: rows read: %d, expected: %d, unused values: %s' % (read_rows, self.samples, unused_values))
+                self.err |= 0b00001000
                 # Terminate the iterator.
                 break
             # A row with all-zeros means end of data.
             if row == [xoffset] * self.data_series:
                 if read_rows != self.samples:
-                    print(u'WARNING: Unexpected end of data: found an all-zeros row, only %d read so far, expected %d' % (read_rows, self.samples))
+                    logging.warning(u'Unexpected end of data: found an all-zeros row, only %d read so far, expected %d' % (read_rows, self.samples))
+                    self.err |= 0b00001100
                 # Terminate the iterator.
                 break
             # Assume that the first two data series are lead II and lead III,
@@ -154,12 +164,16 @@ class ecg():
     def export_csv(self, filename=None, overwrite=False, as_millivolt=False, none_as_zero=False, xoffset=ECG90A_XOFFSET, cols=DEFAULT_CSV_COLUMNS):
         """ Export ECG data into a CSV format file """
 
+        if self.err != 0:
+            logging.warning(u'ECG file header did not parsed correctly')
+            return None
         if filename is None:
             filename_csv = self.filename + u'.csv'
         else:
             filename_csv = filename
         if os.path.exists(filename_csv) and not overwrite:
-            print(u'WARNING: Output file "%s" already exists, will not overwrite.' % (filename_csv,))
+            logging.warning(u'Output file "%s" already exists, will not overwrite.' % (filename_csv,))
+            self.err |= 0b00010000
             return None
         amplitude_mult = float(ECG90A_AMPL_NANOVOLT) / 1000000.0
         with open(filename_csv, 'w') as f:
@@ -168,17 +182,22 @@ class ecg():
                     f.write(','.join(scp.csv_format(x, multiplier=amplitude_mult, none_as_zero=none_as_zero) for x in row) + '\n')
                 else:
                     f.write(','.join(scp.csv_format(x, num_format=u'%d', none_as_zero=none_as_zero) for x in row) + '\n')
+        return filename_csv
 
 
     def export_scp(self, filename=None, overwrite=False, xoffset=ECG90A_XOFFSET):
         """ Export data into a SCP-ECF file """
 
+        if self.err != 0:
+            logging.warning(u'ECG file header did not parsed correctly')
+            return None
         if filename is None:
             filename_scp = self.filename + u'.scp'
         else:
             filename_scp = filename
         if os.path.exists(filename_scp) and not overwrite:
-            print(u'WARNING: Output file "%s" already exists, will not overwrite.' % (filename_scp,))
+            logging.warning(u'Output file "%s" already exists, will not overwrite.' % (filename_scp,))
+            self.err |= 0b00010000
             return None
 
         # Section pointers are required at least from #0 to #11.
@@ -203,7 +222,8 @@ class ecg():
             t = datetime.datetime.strptime(self.timestamp, '%Y-%m-%d %H:%M:%S')
         except:
             t = self.file_timestamp
-            print(u'WARNING: Cannot parse case time, using file timestamp "%s"' % (t.strftime('%Y-%m-%d %H:%M:%S'),))
+            logging.warning(u'Cannot parse case time. Using file timestamp instead: "%s"' % (t.strftime('%Y-%m-%d %H:%M:%S'),))
+            self.err |= 0b01000000
         s[1]  = scp.make_tag(scp.TAG_PATIENT_ID, scp.make_asciiz(self.patient_name))
         s[1] += scp.make_tag(scp.TAG_ECG_SEQ_NUM, scp.make_asciiz(self.case))
         s[1] += scp.make_tag(scp.TAG_PATIENT_LAST_NAME, scp.make_asciiz(self.patient_name))
@@ -241,7 +261,8 @@ class ecg():
         bytes_to_store = int(self.samples * ECG90A_SAMPLE_BITS / 8)
         max_samples = int(0xffff / (ECG90A_SAMPLE_BITS / 8))
         if self.samples > max_samples:
-            print(u'WARNING: Cannot store %d samples in SCP-ECG rhythm data, max is %d' % (self.samples, max_samples))
+            logging.warning(u'Cannot store %d samples in SCP-ECG rhythm data, max is %d' % (self.samples, max_samples))
+            self.err |= 0b10000000
             bytes_to_store = int(max_samples * (ECG90A_SAMPLE_BITS / 8))
         for i in range(0, leads_number):
             s[6] += struct.pack('<H', bytes_to_store)
@@ -290,3 +311,4 @@ class ecg():
         f_out = open(filename_scp, 'wb')
         f_out.write(crc + scp_ecg)
         f_out.close()
+        return filename_scp
