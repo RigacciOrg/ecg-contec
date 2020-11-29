@@ -103,10 +103,10 @@ RACE_CAUCASIAN = 1
 RACE_BLACK = 2
 RACE_ORIENTAL = 3
 RACE = {
-    RACE_UNSPECIFIED: 'Unspecified',
-    RACE_CAUCASIAN: 'Caucasian',
-    RACE_BLACK: 'Black',
-    RACE_ORIENTAL: 'Oriental'
+    RACE_UNSPECIFIED: u'Unspecified',
+    RACE_CAUCASIAN: u'Caucasian',
+    RACE_BLACK: u'Black',
+    RACE_ORIENTAL: u'Oriental'
 }
 
 # Section #1 - Patient Data - Weight
@@ -131,21 +131,38 @@ AGE_WEEKS = 3
 AGE_DAYS = 4
 AGE_HOURS = 5
 AGE = {
-    AGE_UNSPECIFIED: 'Unspecified', 
-    AGE_YEARS: 'Years', 
-    AGE_MONTHS: 'Months', 
-    AGE_WEEKS: 'Weeks', 
-    AGE_DAYS: 'Days', 
-    AGE_HOURS: 'Hours'
+    AGE_UNSPECIFIED: u'Unspecified', 
+    AGE_YEARS: u'Years', 
+    AGE_MONTHS: u'Months', 
+    AGE_WEEKS: u'Weeks', 
+    AGE_DAYS: u'Days', 
+    AGE_HOURS: u'Hours'
 }
 
 # Section #1 - Patient Data - Tags type
-TAGS_MANDATORY = [2, 14, 25, 26]
-TAGS_TYPE_DATE = [5, 25]
-TAGS_TYPE_TIME = [26]
-TAGS_TYPE_AGE = [4]
-TAGS_TYPE_ASCIIZ = [0, 1, 2, 3, 13, 16, 17, 18, 19, 20, 21, 22, 23, 30, 31, 35]
-TAGS_TYPE_MACHINE_ID = [14, 15]
+TAGS_MANDATORY = [TAG_PATIENT_ID, TAG_ACQ_DEV_ID, TAG_DATE_ACQ, TAG_TIME_ACQ]
+TAGS_TYPE_DATE = [TAG_PATIENT_DATE_OF_BIRTH, TAG_DATE_ACQ]
+TAGS_TYPE_TIME = [TAG_TIME_ACQ]
+TAGS_TYPE_AGE = [TAG_PATIENT_AGE]
+TAGS_TYPE_ASCIIZ = [
+    TAG_PATIENT_LAST_NAME,
+    TAG_PATIENT_FIRST_NAME,
+    TAG_PATIENT_ID,
+    TAG_PATIENT_SECOND_LAST_NAME,
+    TAG_DIAG_INDICATION,
+    TAG_ACQ_INST_DESC,
+    TAG_ANALYZ_INST_DESC,
+    TAG_ACQ_DEPT_DESC,
+    TAG_ANALYZ_DEPT_DESC,
+    TAG_REF_PHYSICIAN,
+    TAG_LATEST_PHYSICIAN,
+    TAG_TECHNICIAN_DESC,
+    TAG_ROOM_DESC,
+    TAG_FREE_TEXT,
+    TAG_ECG_SEQ_NUM,
+    TAG_TEXT_MED_HIST
+]
+TAGS_TYPE_MACHINE_ID = [TAG_ACQ_DEV_ID, TAG_ANALYZ_DEV_ID]
 
 # Section #3 - Lead Definition
 # Numbering scheme from ANSI-AAMI EC71:2001
@@ -242,16 +259,16 @@ ENCODING_REAL = 0
 ENCODING_FIRST_DIFF = 1
 ENCODING_SECOND_DIFF = 2
 ENCODING = {
-    ENCODING_REAL: 'Real (zero difference)',
-    ENCODING_FIRST_DIFF: 'First difference',
-    ENCODING_SECOND_DIFF: 'Second difference'
+    ENCODING_REAL: u'Real (zero difference)',
+    ENCODING_FIRST_DIFF: u'First difference',
+    ENCODING_SECOND_DIFF: u'Second difference'
 }
 
 BIMODAL_COMPRESSION_FALSE = 0
 BIMODAL_COMPRESSION_TRUE = 1
 BIMODAL_COMPRESSION = {
-    BIMODAL_COMPRESSION_FALSE: 'Not used', 
-    BIMODAL_COMPRESSION_TRUE: 'Bimodal'
+    BIMODAL_COMPRESSION_FALSE: u'Not used', 
+    BIMODAL_COMPRESSION_TRUE: u'Bimodal'
 }
 
 MEASURE_NOT_COMPUTED = 29999
@@ -276,13 +293,9 @@ def make_time(d):
     """ Return a 3 bytes SCP-ECG encoded time from a datetime object """
     return struct.pack('<B', d.hour) + struct.pack('<B', d.minute) + struct.pack('<B', d.second)
 
-def make_weight(weight, unit):
-    """ Return a 3 bytes SCP-ECG encoded weight object """
-    return struct.pack('<H', weight) + struct.pack('<B', unit)
-
-def make_age(age, unit):
-    """ Return a 3 bytes SCP-ECG encoded age object """
-    return struct.pack('<H', age) + struct.pack('<B', unit)
+def make_3bytes_intval_unit(val, unit):
+    """ Return a 3 bytes SCP-ECG encoded field with value and unit """
+    return struct.pack('<H', val) + struct.pack('<B', unit)
 
 def make_asciiz(s):
     """ Return a zero-terminated string """
@@ -458,7 +471,7 @@ class raw_decoder():
     def decode(self, data):
         words = len(data)
         if (words % 2) != 0:
-            print('WARNING: Data contains an odd number of bytes, shall be even')
+            print(u'WARNING: Data contains an odd number of bytes, shall be even')
             words -= 1
         for i in range(0, words, 2):
             yield struct.unpack('<h', data[i:i+2])[0]
@@ -505,14 +518,14 @@ class huffman_decoder():
                     orig_bits_buffer += ('1' if (bool(byte & m)) else '0')
                     get_orig_bits -= 1
                     if get_orig_bits == 0:
-                        #print('DEBUG: Read orig %dbit: %s' % (len(orig_bits_buffer), orig_bits_buffer))
+                        #print(u'DEBUG: Read orig %dbit: %s' % (len(orig_bits_buffer), orig_bits_buffer))
                         # Pack as unsigned, then unpack as signed.
                         if len(orig_bits_buffer) == 8:
-                            orig_val = struct.unpack('b', struct.pack('B', int(orig_bits_buffer, 2)))[0]
+                            orig_val = struct.unpack('<b', struct.pack('<B', int(orig_bits_buffer, 2)))[0]
                         elif len(orig_bits_buffer) == 16:
-                            orig_val = struct.unpack('h', struct.pack('H', int(orig_bits_buffer, 2)))[0]
+                            orig_val = struct.unpack('<h', struct.pack('<H', int(orig_bits_buffer, 2)))[0]
                         else:
-                            print('ERROR: Invalid bit buffer length: %d' % (len(orig_bits_buffer),))
+                            print(u'ERROR: Invalid bit buffer length: %d' % (len(orig_bits_buffer),))
                             return
                         yield orig_val
                         orig_bits_buffer = ''
@@ -525,17 +538,17 @@ class huffman_decoder():
                     if (size, huffman_prefix) in self.default_table:
                         symbol = self.default_table[size, huffman_prefix]
                         if symbol == self._8bit:
-                            #print('DEBUG: Found 8 bit value')
+                            #print(u'DEBUG: Found 8 bit value')
                             get_orig_bits = 8
                         elif symbol == self._16bit:
-                            #print('DEBUG: Found 16 bit value')
+                            #print(u'DEBUG: Found 16 bit value')
                             get_orig_bits = 16
                         else:
                             yield symbol
                             orig_bits_buffer = ''
                             huffman_prefix = 0
                             size = 0
-        #print('DEBUG: Iterator terminated')
+        #print(u'DEBUG: Iterator terminated')
         fmt = '{0:0%db}' % (size,)
         if size > 0:
-            print('WARNING: Unmatched Huffman prefix = %s' % (fmt.format(huffman_prefix),))
+            print(u'WARNING: Unmatched Huffman prefix = %s' % (fmt.format(huffman_prefix),))
