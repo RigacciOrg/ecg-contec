@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Parses an ECG file produced by the Contec ECG90A electrocardiograph
+and produces a graph in PDF (vector) or PNG (raster) format.
+
+Required custom modules: ecg_contec.py, which requires ecg_scp.py
+Required Python packages: python3-numpy python3-scipy python3-reportlab
+"""
+
+import ecg_contec as contec
+import argparse
+import math
+import os.path
+import subprocess
+import sys
+import warnings
+import numpy as np
+from scipy.signal import butter, lfilter, filtfilt
+from scipy.ndimage import uniform_filter
+from reportlab.graphics.shapes import Drawing, Line, PolyLine, String, Group, colors
+from reportlab.lib.units import mm, inch
+from reportlab.lib.colors import HexColor
+from reportlab.graphics import renderPDF, renderPM
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+__author__ = "Niccolo Rigacci"
+__copyright__ = "Copyright 2020 Niccolo Rigacci <niccolo@rigacci.org>"
+__license__ = "GPLv3-or-later"
+__email__ = "niccolo@rigacci.org"
+__version__ = "0.1.0"
+
+class ecg_plot():
+
+    # Default unit of measure is mm, suitable for PDF (vector) output.
+    DEFAULT_UNIT = mm
+    # Sizes should be scaled for 300 dpi raster output.
+    #DEFAULT_UNIT = mm * 300 / inch
+
+    # Graphical elements size (in mm).
+    DEFAULT_PAPER_W = 297.0
+    DEFAULT_PAPER_H = 210.0
+    MARGIN_LEFT = 8.0
+    MARGIN_RIGHT = 8.0
+    MARGIN_TOP = 10.0
+    MARGIN_BOTTOM = 15.0
+    FONT_SIZE = 4.00
+    FONT_SMALL_SIZE = 3.50
+    THICK_LINE = 0.24
+    THIN_LINE = 0.16
+
+    DEFAULT_ROWS = 6
+    DEFAULT_COLS = 2
+    DEFAULT_SPEED = 25.0  # Default X-axis scale is 25 mm/s
+    DEFAULT_LEADS_TO_PLOT = list(range(0, 12))
+    LEAD_LABEL = (u'I', u'II', u'III', u'aVR', u'aVL', u'aVF', u'V1', u'V2', u'V3', u'V4', u'V5', u'V6')
+
+    LINEJOIN_MITER = 0
+    LINEJOIN_ROUND = 1
+    LINEJOIN_BEVEL = 2
+
+    # The following values can be changed before calling add_lead_plots().
+    # X-distance between polot points (in self.unit).
+    PLOT_PITCH = 0.2
+    # Apply an uniform_filter() if each PLOT_PITCH covers more than MIN sample points.
+    UNIFORM_FILTER_MIN_PTS = 4
+    # Use scipy.signal.lfilter() instead of scipy.signal.filtfilt() for low-pass filtering.
+    USE_LFILTER = False
+
+
+    class line_style():
+        def __init__(self, strokeColor=colors.black, strokeWidth=1, strokeLineCap=0, strokeLineJoin=0, strokeMiterLimit=0, strokeDashArray=None, strokeOpacity=None):
+            self.strokeColor = strokeColor
+            self.strokeWidth = strokeWidth
+            self.strokeLineJoin = strokeLineJoin
+
+
+    class string_style():
+        def __init__(self, fontName='Times-Roman', fontSize=10, fillColor=colors.black, textAnchor='start'):
+            self.fontName = fontName
+            self.fontSize = fontSize
+            self.fillColor = fillColor
+            self.textAnchor = textAnchor
+
+
+    def __init__(self, unit=DEFAULT_UNIT, paper_w=DEFAULT_PAPER_W, paper_h=DEFAULT_PAPER_H, cols=DEFAULT_COLS, rows=DEFAULT_ROWS, time0=0.0, ampli=None, speed=DEFAULT_SPEED):
+        pdfmetrics.registerFont(TTFont('sans-cond', 'fonts/DejaVuSansCondensed.ttf'))
+        pdfmetrics.registerFont(TTFont('sans-mono', 'fonts/DejaVuSansMono.ttf'))
+        pdfmetrics.registerFont(TTFont('sans-mono-bold', 'fonts/DejaVuSansMono-Bold.ttf'))
+        self.unit = unit
+        self.paper_w = paper_w
+        self.paper_h = paper_h
+        self.cols = cols
+        self.rows = rows
+        self.time0 = time0
+        self.ampli = ampli
+        self.speed = speed
+        self.leads_to_plot = self.DEFAULT_LEADS_TO_PLOT
+        # Calculated sizes.
+        self.graph_w = int((self.paper_w - (self.MARGIN_LEFT + self.MARGIN_RIGHT)) / 10.0) * 10.0
+        self.graph_h = int((self.paper_h - (self.MARGIN_TOP + self.MARGIN_BOTTOM) - self.FONT_SIZE * 8) / 10.0) * 10.0
+        self.graph_x = (self.paper_w - self.graph_w) / 2.0
+        self.graph_y = self.MARGIN_BOTTOM
+        self.time1 = self.time0 + ((self.graph_w / self.cols)  / self.speed)
+        if self.ampli is None:
+            self.ampli = int((self.graph_h / (self.rows * 1.8)) / 5) * 5.0
+        # Calculated styles.
+        self.sty_line_thick  = self.line_style(strokeColor=HexColor('#e48485'), strokeWidth=self.THICK_LINE*self.unit)
+        self.sty_line_blue   = self.line_style(strokeColor=colors.blue, strokeWidth=self.THICK_LINE*self.unit)
+        self.sty_line_thin   = self.line_style(strokeColor=HexColor('#eecfce'), strokeWidth=self.THIN_LINE*self.unit)
+        self.sty_line_plot   = self.line_style(strokeColor=colors.black, strokeWidth=self.THICK_LINE*self.unit, strokeLineJoin=self.LINEJOIN_ROUND)
+        self.sty_str_bold    = self.string_style(fontName='sans-mono-bold', fontSize=self.FONT_SIZE*self.unit)
+        self.sty_str_regular = self.string_style(fontName='sans-cond', fontSize=self.FONT_SMALL_SIZE*self.unit)
+        self.sty_str_blue    = self.string_style(fontName='sans-mono', fontSize=self.FONT_SMALL_SIZE*self.unit, fillColor=colors.blue)
+        # Calculate how many sample points there are for each plot pitch.
+        self.samples_per_plot_pitch = 1 + int(contec.ECG90A_SAMPLE_RATE / self.speed * self.PLOT_PITCH)
+        # Preapre the drawing.
+        self.draw = Drawing(paper_w*self.unit, paper_h*self.unit)
+
+
+    def axis_tick(self, x, y, s):
+        return self.draw_line(x, y-0.5, x, y+3, s)
+
+
+    def plot_separator(self, x, y, s):
+        return Group(self.draw_line(x, y+0.5, x, y+8.5, s), self.draw_line(x, y-0.5, x, y-8.5, s))
+
+
+    def draw_polyline(self, points, s):
+        return PolyLine(points, strokeColor=s.strokeColor, strokeWidth=s.strokeWidth, strokeLineJoin=s.strokeLineJoin)
+
+
+    def draw_line(self, x0, y0, x1, y1, s):
+        return Line(x0 * self.unit, y0 * self.unit, x1 * self.unit, y1 * self.unit, strokeColor=s.strokeColor, strokeWidth=s.strokeWidth)
+
+
+    def draw_text(self, x, y, text, s):
+        s1 = String(x * self.unit, y * self.unit, text)
+        s1.fontName = s.fontName
+        s1.fontSize = s.fontSize
+        s1.fillColor = s.fillColor
+        s1.textAnchor = s.textAnchor
+        return s1
+
+
+    def ticks_positions(self, x_min, x_max, mm_per_x_unit):
+        """ Calculate where to place the ticks over bottom X axis """
+        ticks = {}
+        axis_len = x_max - x_min
+        # Start searching a suitable span from the power of 10 above axis_len.
+        if axis_len < 1.0:
+            e = 10 ** int(math.log10(axis_len))
+        else:
+            e = 10 ** (int(math.log10(axis_len)) + 1)
+        m = 1
+        divs = 0
+        while divs < 5:
+            span = m * e
+            divs = int(axis_len / span)
+            if m == 1:
+                e = e / 10.0
+                m = 5
+            elif m == 5:
+                m = 2
+            else:
+                m = 1
+        if (x_min % span) == 0:
+            first_tick = (int(x_min / span)) * span
+        else:
+            first_tick = (int(x_min / span) + 1) * span
+        # Stop ticks 5mm before the axis end.
+        last_tick = x_max - (5.0 / mm_per_x_unit)
+        for x_val in np.arange(first_tick, last_tick, span):
+            position = (x_val - x_min) * mm_per_x_unit
+            ticks[position] = x_val
+        return ticks
+
+
+    def lead_plot_points(self, yp, x_offset, y_offset, width):
+        """ Return the point coordinates (in self.unit) for one lead graph """
+        """ Coordinates are shifted into the page by (x_offset, y_offset) """
+        plot_points = []
+        start = 0.0
+        stop = width
+        step = self.PLOT_PITCH
+        # X-axis points for np.interp()
+        xp = np.array(range(0, len(yp)))
+        for x in np.arange(start, stop, step):
+            sample = (self.time0 + (x / self.speed)) * contec.ECG90A_SAMPLE_RATE
+            y = np.interp(sample, xp, yp, contec.NULL_VALUE, contec.NULL_VALUE)
+            if not np.isnan(y) and y != contec.NULL_VALUE:
+                y = y * contec.ECG90A_AMPL_NANOVOLT / 1000000.0 * self.ampli
+                px = (x_offset + x) * self.unit
+                py = (y_offset + y) * self.unit
+                plot_points.extend((px, py))
+        return plot_points
+
+
+    def butter_lowpass_lfilter(self, data, cutoff, fs, order=5):
+        # The lfilter() function is not zero-phase, it usually
+        # adds different amounts of delay at different frequencies.
+        nyq = 0.5 * fs
+        normal_cutoff = cutoff / nyq
+        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        y = lfilter(b, a, data)
+        return y
+
+
+    def butter_lowpass_filtfilt(self, data, cutoff, fs, order=2):
+        # The filtfilt() function applies a linear filter twice,
+        # once forward and once backwards. It is zero-phase (doesn't
+        # shift the signal as it filters). The order of filtfilt()
+        # performs about twice the same order applied by lfilter().
+        nyq = 0.5 * fs
+        normal_cutoff = cutoff / nyq
+        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        # Prevent scipy.signal from generating:
+        # FutureWarning: Using a non-tuple sequence for multidimensional indexing is deprecated;
+        # Solved in https://github.com/scipy/scipy/pull/8944
+        warnings.simplefilter(action='ignore', category=FutureWarning)
+        y = filtfilt(b, a, data)
+        warnings.simplefilter(action='default', category=FutureWarning)
+        return y
+
+
+    def add_graph_paper(self):
+        """ Draw graph paper: thick/thin horizontal/vertical lines """
+        x0 = self.graph_x
+        x1 = self.graph_x + self.graph_w
+        y0 = self.graph_y
+        y1 = self.graph_y + self.graph_h
+        step = 1.0
+        for x in np.arange(x0, x1+0.1, step):
+            self.draw.add(self.draw_line(x, y0, x, y1, self.sty_line_thin))
+        for y in np.arange(y0, y1+0.1, step):
+            self.draw.add(self.draw_line(x0, y, x1, y, self.sty_line_thin))
+        step = 5.0
+        for x in np.arange(x0, x1+0.1, step):
+            self.draw.add(self.draw_line(x, y0, x, y1, self.sty_line_thick))
+        for y in np.arange(y0, y1+0.1, step):
+            self.draw.add(self.draw_line(x0, y, x1, y, self.sty_line_thick))
+
+
+    def add_case_data(self, ecg):
+        """ Print file and case info """
+        col_left = (
+            'Filename: %s' % (ecg.filename,),
+            'Case: %s' % (ecg.case,),
+            'Date: %s' % (ecg.timestamp,),
+            'Duration: %.1f s' % (ecg.duration,)
+        )
+        x = self.graph_x
+        y = self.paper_h - self.MARGIN_TOP - self.FONT_SIZE * 1.125
+        for d in col_left:
+            self.draw.add(self.draw_text(x, y, d, self.sty_str_bold))
+            y -= self.FONT_SIZE * 1.125
+
+
+    def add_patient_data(self, ecg):
+        """ Print patient data """
+        print_name = ecg.patient_name if ecg.patient_name != u'' else u'.'*8
+        print_age = ecg.patient_age if ecg.patient_age > 0 else u'.'*3
+        print_weight = ecg.patient_weight if ecg.patient_weight > 0 else u'.'*3
+        print_sex = ecg.patient_sex_label if ecg.patient_sex <= 1 else u'.'*3
+        col_right = (
+            'Patient: %s' % (print_name,),
+            'Age: %s, Sex: %s, Weight: %s' % (print_age, print_sex, print_weight)
+        )
+        x = self.graph_x + self.graph_w / 2.0
+        y = self.paper_h - self.MARGIN_TOP - self.FONT_SIZE * 1.125
+        for d in col_right:
+            self.draw.add(self.draw_text(x, y, d, self.sty_str_bold))
+            y -= self.FONT_SIZE * 1.125
+
+
+    def add_plot_info_text(self):
+        """ Text above and below the graph paper """
+        x = self.graph_x + 1.0
+        y = self.graph_y + self.graph_h + self.FONT_SMALL_SIZE * 0.33
+        text = u'Printing interval: %.1fs ÷ %.1fs' % (self.time0, self.time1)
+        self.draw.add(self.draw_text(x, y, text, self.sty_str_regular))
+        y = self.MARGIN_BOTTOM - self.FONT_SMALL_SIZE * 1.125
+        text = u'Speed: %.2fmm/s %s Leads: %.2fmm/mV' % (self.speed, u' '*6, self.ampli)
+        self.draw.add(self.draw_text(x, y, text, self.sty_str_regular))
+
+
+    def add_plot_filter_text(self, lowpass):
+        """ Filter description below the graph paper """
+        x = self.graph_x + (self.graph_w / 2) - 20
+        y = self.MARGIN_BOTTOM - self.FONT_SMALL_SIZE * 1.125
+        text = u'Sample Rate: %dHz; Filter: ' % (contec.ECG90A_SAMPLE_RATE,)
+        labels = []
+        if lowpass is not None:
+            filter_algo = u'lfilter' if self.USE_LFILTER else u'filtfilt'
+            labels.append(u'Lowpass (%s) %.1fHz' % (filter_algo, lowpass))
+        if self.samples_per_plot_pitch >= self.UNIFORM_FILTER_MIN_PTS:
+            labels.append(u'Uniform %dpt' % (self.samples_per_plot_pitch,))
+        if len(labels) > 0:
+            text += ', '.join(labels)
+        else:
+            text += u'None'
+        self.draw.add(self.draw_text(x, y, text, self.sty_str_regular))
+
+
+    def add_lead_plots(self, data, lowpass=None, offset=0):
+        """ Lead plots, aligned into a grid of ROWS x COLS """
+        ticks = self.ticks_positions(self.time0, self.time1, self.speed)
+        sector_w = self.graph_w / self.cols
+        sector_h = self.graph_h / self.rows
+        k = 0
+        for c in range(0, self.cols):
+            # Add the ticks over the X axis.
+            for pos in ticks:
+                x = pos + self.graph_x + sector_w * c
+                self.draw.add(self.axis_tick(x, self.MARGIN_BOTTOM, self.sty_line_blue))
+                self.draw.add(self.draw_text(x+0.2, self.MARGIN_BOTTOM+0.2, '%.1f' % ticks[pos], self.sty_str_blue))
+            for r in range(0, self.rows):
+                if k >= len(self.leads_to_plot):
+                    break
+                i = self.leads_to_plot[k]
+                label = self.LEAD_LABEL[i]
+                x0 = self.FONT_SIZE + self.graph_x + sector_w * c
+                y0 = (self.graph_y + self.graph_h) - self.FONT_SIZE - sector_h * r
+                self.draw.add(self.draw_text(x0, y0, label, self.sty_str_bold))
+                if c > 0:
+                    x = self.graph_x + sector_w * c
+                    y = self.graph_y + self.graph_h - sector_h * (r + 0.5)
+                    self.draw.add(self.plot_separator(x, y, self.sty_line_plot))
+                if lowpass is None:
+                    filt_label = u'Lowpass None'
+                    filt_data = data[i]
+                else:
+                    if self.USE_LFILTER:
+                        filt_label = u'Lowpass lfilt()'
+                        filt_data = self.butter_lowpass_lfilter(data[i], lowpass, contec.ECG90A_SAMPLE_RATE, 5)
+                    else:
+                        filt_label = u'Lowpass filtfilt()'
+                        filt_data = self.butter_lowpass_filtfilt(data[i], lowpass, contec.ECG90A_SAMPLE_RATE, 2)
+                # If many points per pitch, apply an uniform_filter on them.
+                if self.samples_per_plot_pitch >= self.UNIFORM_FILTER_MIN_PTS:
+                    filt_label += u'; uniform_filter(size=%d)' % (self.samples_per_plot_pitch,)
+                    filt_data = uniform_filter(filt_data, self.samples_per_plot_pitch)
+                x_offset = self.graph_x + sector_w * c
+                y_offset = self.graph_y + self.graph_h - sector_h * (r + 0.5) - offset
+                print(u'%3s: %s' % (label, filt_label))
+                p = self.lead_plot_points(filt_data, x_offset, y_offset, sector_w)
+                if len(p) > 1:
+                    self.draw.add(self.draw_polyline(p, self.sty_line_plot))
+                k += 1
+
+
+
+#--------------------------------------------------------------------------
+# Parse command line arguments.
+#--------------------------------------------------------------------------
+parser = argparse.ArgumentParser(description=u'Parse an ECG90A file and create a PDF or PNG graph.')
+parser.add_argument('filename', type=str, help=u'Contec ECG90A file to read')
+parser.add_argument('filename_out', nargs='?', default='', type=str, help=u'output PDF or PNG file to write (default append .pdf or .png to filename)')
+parser.add_argument('--png', action='store_true', default=False, help=u'output a PNG raster file instead of PDF (default no)')
+parser.add_argument('--speed', type=float, metavar=u'mm/s', default=25.0, help=u'speed in mm/s (default 25.0)')
+parser.add_argument('--ampli', type=float, metavar=u'mm/mV', help=u'leads amplitude in mm/mV (default auto)')
+parser.add_argument('--time0', type=float, default=0.0, help=u'plotting start time, in seconds (default 0.0)')
+parser.add_argument('--lowpass', type=float, metavar=u'Hz', help=u'add a lowpass filter at specified Hz (default None)')
+parser.add_argument('--format', type=str, default=u'6x2', metavar=u'ROWSxCOLS', help=u'use specified print format (default 6x1)')
+parser.add_argument('--leads', type=str, default=None, metavar=u'LIST', help=u'comma separated list of leads to print (default 1,..,12)')
+parser.add_argument('-y', '--overwrite', action='store_true', default=False, help=u'overwrite existing output files (default no)')
+args = parser.parse_args()
+
+filename = args.filename
+filename_out = None if len(args.filename_out) < 1 else args.filename_out
+ext_out = u'.png' if args.png else u'.pdf'
+try:
+    rows, cols = args.format.split('x')
+    rows, cols = int(rows), int(cols)
+except:
+    print(u'Invalid parameter: format')
+    sys.exit(1)
+if args.leads is None:
+    leads_to_plot = list(range(0, 12))
+else:
+    leads_to_plot = []
+    try:
+        for lead in args.leads.split(','):
+            i = int(lead)
+            if i >= 1 and i <= 12:
+                leads_to_plot.append(i-1)
+    except:
+        print(u'Invalid parameter: leads')
+        sys.exit(1)
+
+if not os.path.exists(filename):
+    print(u'ERROR: Input file "%s" does not exists' % (filename,))
+    sys.exit(1)
+if filename_out is None:
+    if filename.lower().endswith('.ecg'):
+        filename_out = filename[:-4] + ext_out
+    else:
+        filename_out = filename + ext_out
+if os.path.exists(filename_out) and not args.overwrite:
+    print(u'WARNING: File "%s" already exists, will not overwrite.' % (filename_out,))
+    sys.exit(1)
+
+#--------------------------------------------------------------------------
+# Main program.
+#--------------------------------------------------------------------------
+# Open the Contec ECG file and load rhythm data into a numpy array.
+# Read (#samples)rows of (12)samples, build an array with (12)rows
+# with (#samples)lead data.
+# Values of NoneType from ecg.readline() will become numpy.nan into the array.
+ecg = contec.ecg(filename)
+lead_data = np.zeros((12, ecg.samples))
+i = 0
+for line in ecg.readline():
+    lead_data[:, i] = line
+    i += 1
+
+if args.png:
+    # Select PNG (raster) resolution in dpi.
+    output_units = mm * 300 / inch
+else:
+    # Select PDF (vector) resolution in mm.
+    output_units = mm
+
+# Prepare the Reportlab Drawing object.
+plot = ecg_plot(unit=output_units, cols=cols, rows=rows, time0=args.time0, ampli=args.ampli, speed=args.speed)
+plot.leads_to_plot = leads_to_plot
+
+# Prepare the sheet.
+plot.add_graph_paper()
+plot.add_case_data(ecg)
+plot.add_patient_data(ecg)
+plot.add_plot_info_text()
+
+# Plot the rhythm data.
+plot.add_lead_plots(lead_data, lowpass=args.lowpass)
+
+## An alternative plot, shifted down by 10 units.
+#plot.UNIFORM_FILTER_MIN_PTS = 1000   # Do not apply uniform_filter().
+#plot.USE_LFILTER = True              # Use lfilter() instead of filtfilt().
+#plot.add_lead_plots(lead_data, lowpass=args.lowpass, offset=10)
+
+# Add info about currently applied filters.
+plot.add_plot_filter_text(args.lowpass)
+
+# Write the output file.
+if args.png:
+    renderPM.drawToFile(plot.draw, filename_out, fmt='PNG')
+else:
+    pdf_title = 'ECG %s %dx%d t0=%.1fsec' % (ecg.case, rows, cols, args.time0)
+    renderPDF.drawToFile(plot.draw, filename_out, pdf_title)
+print(u'INFO: Saved file "%s"' % (filename_out,))
