@@ -3,7 +3,7 @@
 Python program to plot electrocardiogram graphs from files 
 produced by the **Contec ECG90A** device.
 
-The program relay on the Pyhon modules **ecg_contec.py** and 
+The program relies on the Pyhon modules **ecg_contec.py** and 
 **ecg_scp.py**, which should be present in the same directory or 
 installed as system-wide modules. I requires also the libraries 
 Numpy, Scipy and Reportlab. Developed with Python 3.7.
@@ -14,7 +14,7 @@ This is a minimal usage example:
 ./ecg2pdf 0000053.ECG
 ```
 
-You can ask for a PNG filei instead, that will rendered at 300 dpi:
+You can ask for a PNG file instead, that will rendered at 300 dpi:
 
 ```
 ./ecg2pdf --png 0000053.ECG
