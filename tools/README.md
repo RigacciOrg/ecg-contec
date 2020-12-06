@@ -54,7 +54,7 @@ ECG files produced by the **Contec ECG90A** electrocardiograph
 device. Basically it parses the header of the file and it reads 
 the 12 leads data into an array; it can dump a CSV file. The 
 **ecg\_scp.py** is a support module used to convert ECG data 
-into the **SCP-ECG* format.
+into the **SCP-ECG** format.
 
 ## The SCP-ECG standard format
 
