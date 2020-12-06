@@ -3,9 +3,10 @@
 Python program to plot electrocardiogram graphs from files 
 produced by the **Contec ECG90A** device.
 
-The program relies on the Pyhon modules **ecg_contec.py** and 
-**ecg_scp.py**, which should be present in the same directory or 
-installed as system-wide modules. I requires also the libraries 
+The program relies on the Pyhon modules **ecg\_contec.py** and 
+**ecg\_scp.py**, which should be present in the same directory 
+or installed as system-wide modules (you find them into the 
+**[tools](./tools/)** directory). I requires also the libraries 
 Numpy, Scipy and Reportlab. Developed with Python 3.7.
 
 This is a minimal usage example:
@@ -67,7 +68,7 @@ optional arguments:
 
 ## More on filters
 
-If required by the --notch option, the program uses the 
+If required by the **--notch** option, the program uses the 
 scipy.signal.lfilt() to apply a band-stop filter builded with 
 scipy.signal.iirnotch(). This filter is intended to attenuate 
 the noise caused e.g. by AC mains at 50 Hz or 60 Hz. The filter 
@@ -75,7 +76,7 @@ is 6 Hz wide (i.e. the -3 dB threshold is set at +/- 3 Hz the
 requested frequency, where a -3 dB attenuation means to half the 
 noise power.
 
-If required by the --lowpass option, the program uses the 
+If required by the **--lowpass** option, the program uses the 
 scipy.signal.filtfilt() to apply a Butterworth filter builded 
 with scipy.signal.butter(). The filtfilt() is better than 
 lfilter() because it does not shift the phase of the graph and 
