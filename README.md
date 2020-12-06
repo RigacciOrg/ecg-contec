@@ -84,11 +84,12 @@ it does not generate artifacts at the edges. Beware the
 filtfilt() performs two passes (forward and backward), so the 
 order used is generally the half the one used with lfilter().
 
-The program generates one plot pitch every 0.2 mm, if that pitch 
-correspond to more than 4 sample points, an uniform_filter() is 
-applied over the pitch segment. This filter does not alter the 
-plot, because it works under the size of each plot segment, it 
-just uses an uniformed value instead of the center one.
+The program generates one plot pitch every 0.2 mm on the X axis; 
+if that pitch includes more than 4 sample points, an 
+uniform_filter() is applied over the pitch segment. This filter 
+does not alter the plot shape, because it works under the size 
+of each plot segment, it just uses an uniformed value instead of 
+the center one.
 
 ## Web References
 
