@@ -16,7 +16,7 @@ import subprocess
 import sys
 import warnings
 import numpy as np
-from scipy.signal import butter, lfilter, filtfilt
+from scipy.signal import butter, lfilter, filtfilt, iirnotch
 from scipy.ndimage import uniform_filter
 from reportlab.graphics.shapes import Drawing, Line, PolyLine, String, Group, colors
 from reportlab.lib.units import mm, inch
@@ -97,6 +97,8 @@ class ecg_plot():
         self.ampli = ampli
         self.speed = speed
         self.leads_to_plot = self.DEFAULT_LEADS_TO_PLOT
+        self.lowpass = None
+        self.notch = None
         # Calculated sizes.
         self.graph_w = int((self.paper_w - (self.MARGIN_LEFT + self.MARGIN_RIGHT)) / 10.0) * 10.0
         self.graph_h = int((self.paper_h - (self.MARGIN_TOP + self.MARGIN_BOTTOM) - self.FONT_SIZE * 8) / 10.0) * 10.0
@@ -179,7 +181,7 @@ class ecg_plot():
 
     def lead_plot_points(self, yp, x_offset, y_offset, width):
         """ Return the point coordinates (in self.unit) for one lead graph """
-        """ Coordinates are shifted into the page by (x_offset, y_offset) """
+        # Coordinates are shifted into the page by (x_offset, y_offset).
         plot_points = []
         start = 0.0
         stop = width
@@ -197,7 +199,18 @@ class ecg_plot():
         return plot_points
 
 
+    def iirnotch_filter(self, data, cutoff, fs):
+        """ Apply a band-stop filter at the specified cutoff frequency """
+        # The quality (-3 dB threshold) is set at cutoff +/- 3 Hz.
+        w0 = cutoff / (fs * 0.5)
+        quality = cutoff / 6.0
+        b, a = iirnotch(w0, quality)
+        y = lfilter(b, a, data)
+        return y
+
+
     def butter_lowpass_lfilter(self, data, cutoff, fs, order=5):
+        """ Apply the lfilter() lowpass filter at the specified cutoff frequency """
         # The lfilter() function is not zero-phase, it usually
         # adds different amounts of delay at different frequencies.
         nyq = 0.5 * fs
@@ -208,6 +221,7 @@ class ecg_plot():
 
 
     def butter_lowpass_filtfilt(self, data, cutoff, fs, order=2):
+        """ Apply the filtfilt() lowpass filter at the specified cutoff frequency """
         # The filtfilt() function applies a linear filter twice,
         # once forward and once backwards. It is zero-phase (doesn't
         # shift the signal as it filters). The order of filtfilt()
@@ -285,15 +299,17 @@ class ecg_plot():
         self.draw.add(self.draw_text(x, y, text, self.sty_str_regular))
 
 
-    def add_plot_filter_text(self, lowpass):
+    def add_plot_filter_text(self):
         """ Filter description below the graph paper """
-        x = self.graph_x + (self.graph_w / 2) - 20
+        x = self.graph_x + (self.graph_w / 2) - 40
         y = self.MARGIN_BOTTOM - self.FONT_SMALL_SIZE * 1.125
         text = u'Sample Rate: %dHz; Filter: ' % (contec.ECG90A_SAMPLE_RATE,)
         labels = []
-        if lowpass is not None:
+        if self.lowpass is not None:
             filter_algo = u'lfilter' if self.USE_LFILTER else u'filtfilt'
-            labels.append(u'Lowpass (%s) %.1fHz' % (filter_algo, lowpass))
+            labels.append(u'Lowpass (%s) %.1fHz' % (filter_algo, self.lowpass))
+        if self.notch is not None:
+            labels.append(u'Notch %.1fHz' % (self.notch,))
         if self.samples_per_plot_pitch >= self.UNIFORM_FILTER_MIN_PTS:
             labels.append(u'Uniform %dpt' % (self.samples_per_plot_pitch,))
         if len(labels) > 0:
@@ -303,7 +319,7 @@ class ecg_plot():
         self.draw.add(self.draw_text(x, y, text, self.sty_str_regular))
 
 
-    def add_lead_plots(self, data, lowpass=None, offset=0):
+    def add_lead_plots(self, data, offset=0):
         """ Lead plots, aligned into a grid of ROWS x COLS """
         ticks = self.ticks_positions(self.time0, self.time1, self.speed)
         sector_w = self.graph_w / self.cols
@@ -327,23 +343,25 @@ class ecg_plot():
                     x = self.graph_x + sector_w * c
                     y = self.graph_y + self.graph_h - sector_h * (r + 0.5)
                     self.draw.add(self.plot_separator(x, y, self.sty_line_plot))
-                if lowpass is None:
-                    filt_label = u'Lowpass None'
-                    filt_data = data[i]
-                else:
+                filt_data = data[i]
+                applied_filters = []
+                if self.lowpass is not None:
                     if self.USE_LFILTER:
-                        filt_label = u'Lowpass lfilt()'
-                        filt_data = self.butter_lowpass_lfilter(data[i], lowpass, contec.ECG90A_SAMPLE_RATE, 5)
+                        applied_filters.append(u'Lowpass lfilt(%.1f)' % (self.lowpass,))
+                        filt_data = self.butter_lowpass_lfilter(filt_data, self.lowpass, contec.ECG90A_SAMPLE_RATE, 5)
                     else:
-                        filt_label = u'Lowpass filtfilt()'
-                        filt_data = self.butter_lowpass_filtfilt(data[i], lowpass, contec.ECG90A_SAMPLE_RATE, 2)
+                        applied_filters.append(u'Lowpass filtfilt(%.1f)' % (self.lowpass,))
+                        filt_data = self.butter_lowpass_filtfilt(filt_data, self.lowpass, contec.ECG90A_SAMPLE_RATE, 2)
+                if self.notch is not None:
+                    applied_filters.append(u'Notch iirnotch(%.1f)' % (self.notch,))
+                    filt_data = self.iirnotch_filter(filt_data, self.notch, contec.ECG90A_SAMPLE_RATE)
                 # If many points per pitch, apply an uniform_filter on them.
                 if self.samples_per_plot_pitch >= self.UNIFORM_FILTER_MIN_PTS:
-                    filt_label += u'; uniform_filter(size=%d)' % (self.samples_per_plot_pitch,)
+                    applied_filters.append(u'uniform_filter(size=%d)' % (self.samples_per_plot_pitch,))
                     filt_data = uniform_filter(filt_data, self.samples_per_plot_pitch)
                 x_offset = self.graph_x + sector_w * c
                 y_offset = self.graph_y + self.graph_h - sector_h * (r + 0.5) - offset
-                print(u'%3s: %s' % (label, filt_label))
+                print(u'%3s: %s' % (label, '; '.join(applied_filters)))
                 p = self.lead_plot_points(filt_data, x_offset, y_offset, sector_w)
                 if len(p) > 1:
                     self.draw.add(self.draw_polyline(p, self.sty_line_plot))
@@ -361,6 +379,7 @@ parser.add_argument('--png', action='store_true', default=False, help=u'output a
 parser.add_argument('--speed', type=float, metavar=u'mm/s', default=25.0, help=u'speed in mm/s (default 25.0)')
 parser.add_argument('--ampli', type=float, metavar=u'mm/mV', help=u'leads amplitude in mm/mV (default auto)')
 parser.add_argument('--time0', type=float, default=0.0, help=u'plotting start time, in seconds (default 0.0)')
+parser.add_argument('--notch', type=float, metavar=u'Hz', help=u'add a band-stop filter at specified Hz (default None)')
 parser.add_argument('--lowpass', type=float, metavar=u'Hz', help=u'add a lowpass filter at specified Hz (default None)')
 parser.add_argument('--format', type=str, default=u'6x2', metavar=u'ROWSxCOLS', help=u'use specified print format (default 6x1)')
 parser.add_argument('--leads', type=str, default=None, metavar=u'LIST', help=u'comma separated list of leads to print (default 1,..,12)')
@@ -432,16 +451,20 @@ plot.add_case_data(ecg)
 plot.add_patient_data(ecg)
 plot.add_plot_info_text()
 
-# Plot the rhythm data.
-plot.add_lead_plots(lead_data, lowpass=args.lowpass)
-
-## An alternative plot, shifted down by 10 units.
-#plot.UNIFORM_FILTER_MIN_PTS = 1000   # Do not apply uniform_filter().
-#plot.USE_LFILTER = True              # Use lfilter() instead of filtfilt().
-#plot.add_lead_plots(lead_data, lowpass=args.lowpass, offset=10)
+# Plot the rhythm data, with required filters applied.
+plot.lowpass = args.lowpass
+plot.notch = args.notch
+#plot.USE_LFILTER = True  # Use lfilter() instead of filtfilt().
+plot.add_lead_plots(lead_data)
 
 # Add info about currently applied filters.
-plot.add_plot_filter_text(args.lowpass)
+plot.add_plot_filter_text()
+
+# Add alternative plots, shifted down by 10 paper units.
+#plot.lowpass = None
+#plot.notch = None
+#plot.UNIFORM_FILTER_MIN_PTS = 1000  # Do not apply uniform_filter().
+#plot.add_lead_plots(lead_data, offset=10)
 
 # Write the output file.
 if args.png:
