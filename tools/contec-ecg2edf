@@ -29,5 +29,5 @@ print(u'Sex:       %s'   % (ecg.patient_sex_label,))
 print(u'Age:       %d'   % (ecg.patient_age,))
 print(u'Weight:    %d'   % (ecg.patient_weight,))
 
-ecg.export_csv(overwrite=True, as_millivolt=False, none_as_zero=False, cols=12)
-print(u'File "%s" saved' % (filename + '.csv',))
+ecg.export_edf(overwrite=True, cols=12)
+print(u'File "%s" saved' % (filename + '.edf',))

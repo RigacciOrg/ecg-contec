@@ -28,8 +28,6 @@ print(u'Patient:   %s'   % (ecg.patient_name,))
 print(u'Sex:       %s'   % (ecg.patient_sex_label,))
 print(u'Age:       %d'   % (ecg.patient_age,))
 print(u'Weight:    %d'   % (ecg.patient_weight,))
-print(u'Unknown1:  0x%04X' % (int.from_bytes(ecg.unknown1, byteorder='little'),))
-print(u'Unknown2:  0x%04X' % (int.from_bytes(ecg.unknown2, byteorder='little'),))
 
 ecg.export_scp(overwrite=True)
 print(u'File "%s" saved' % (filename + '.scp',))

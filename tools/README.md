@@ -1,25 +1,18 @@
-# contec-ecg2csv, contec-ecg2scp
+# contec-ecg2csv, contec-ecg2edf, contec-ecg2scp
 
 Python scripts to convert electrocardiogram files produced by 
-the **Contec ECG90A** device into CSV files or SCP-ECG files 
-respectively.
+the **Contec ECG90A** device into CSV files, EDF or or SCP-ECG
+files respectively.
 
 The scripts relay on the Pyhon modules **ecg\_contec.py** and 
-**ecg\_scp.py**, which should be present in the same directory 
-or installed as system-wide modules.
+**ecg\_scp.py** (see the partent folder), which should be 
+present in the same directory or installed as system-wide 
+modules.
 
 You can control some aspects of the CSV creation; please refer 
 to the **ecg\_contec.py** source code and see the 
 **export\_csv()** optional parameters, like **as\_millivolt**, 
 **xoffset**, etc.
-
-This is an example on how to use the **ecg\_contec** module:
-
-```
-import ecg_contec as contec
-ecg = contec.ecg('0000037.ECG')
-ecg.export_csv(overwrite=True, as_millivolt=False, cols=12)
-```
 
 # scp-ecg2csv
 
@@ -46,15 +39,6 @@ integers.
 difference") and "second difference" sequences are supported. 
 Bimodal compression, reference beat compression, etc. are not 
 supported.
-
-# The ecg_contec.py and ecg_scp.py modules
-
-The **ecg\_contec.py** Python module was developed to parse the 
-ECG files produced by the **Contec ECG90A** electrocardiograph 
-device. Basically it parses the header of the file and it reads 
-the 12 leads data into an array; it can dump a CSV file. The 
-**ecg\_scp.py** is a support module used to convert ECG data 
-into the **SCP-ECG** format.
 
 ## The SCP-ECG standard format
 
