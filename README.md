@@ -5,9 +5,9 @@ produced by the **Contec ECG90A** device.
 
 The program relies on the Pyhon modules **ecg\_contec.py** and 
 **ecg\_scp.py**, which should be present in the same directory 
-or installed as system-wide modules (you find them into the 
-**[tools](./tools/)** directory). I requires also the libraries 
-Numpy, Scipy and Reportlab. Developed with Python 3.7.
+or installed as system-wide modules. It requires also the 
+libraries Numpy, Scipy and Reportlab. The program was developed 
+and tested with Python 3.7.
 
 This is a minimal usage example:
 
@@ -90,6 +90,23 @@ uniform_filter() is applied over the pitch segment. This filter
 does not alter the plot shape, because it works under the size 
 of each plot segment, it just uses an uniformed value instead of 
 the center one.
+
+## The ecg_contec.py and ecg_scp.py Python modules
+
+The **ecg\_contec.py** Python module was developed to parse the 
+ECG files produced by the **Contec ECG90A** electrocardiograph 
+device. Basically it parses the header of the file and it reads 
+the 12 leads data into an array; it can dump a CSV or EDF file. 
+The **ecg\_scp.py** is a support module used to convert ECG data 
+into the **SCP-ECG** format.
+
+This is an example on how to use the **ecg\_contec** module:
+
+```
+import ecg_contec as contec
+ecg = contec.ecg('0000037.ECG')
+ecg.export_csv(overwrite=True, as_millivolt=False, cols=12)
+```
 
 ## Web References
 
